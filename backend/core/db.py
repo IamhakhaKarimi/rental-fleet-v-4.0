@@ -30,30 +30,56 @@ _dialect: str = "sqlite"
 _is_remote: bool = False
 
 
+def _env(key: str) -> str:
+    """Read a config value from the environment, then Streamlit secrets (guarded so
+    plain-`python` scripts still run off-Streamlit). Returns '' if unset."""
+    v = os.environ.get(key, "").strip()
+    if v:
+        return v
+    try:
+        import streamlit as st
+        return str(st.secrets.get(key, "")).strip()
+    except Exception:
+        return ""
+
+
+def _build_libsql_url(url: str, token: str) -> str:
+    """Turn a Turso URL (`libsql://host` or `sqlite+libsql://host…`) + an auth token
+    into the SQLAlchemy URL the `sqlalchemy-libsql` dialect expects:
+        sqlite+libsql://<host>/?authToken=<token>&secure=true
+    Turso speaks SQLite, so the schema DDL runs unchanged (no Postgres shims)."""
+    from urllib.parse import urlencode, urlsplit, parse_qsl
+    p = urlsplit(url)
+    host = p.netloc or p.path.lstrip("/")
+    q = dict(parse_qsl(p.query))
+    if token:
+        q.setdefault("authToken", token)
+    q.setdefault("secure", "true")
+    return f"sqlite+libsql://{host}/?{urlencode(q)}"
+
+
 def _remote_db_url() -> str:
-    """Return a SQLAlchemy URL for a persistent Postgres database (production), or
-    '' to fall back to the local SQLite file (dev).
+    """Return a SQLAlchemy URL for the production database, or '' to fall back to the
+    local SQLite file (dev). Two managed backends are supported:
 
-    Reads `DATABASE_URL` from the environment first (handy for local testing /
-    non-Streamlit scripts), then from Streamlit secrets on Streamlit Cloud. The
-    Streamlit import is guarded so `core/`-only scripts still run under plain
-    `python`. The standard `postgresql://…` connection string (e.g. from Neon) is
-    rewritten to the pure-Python `postgresql+pg8000://…` driver, and libpq-only
-    query args (`sslmode`, `channel_binding`) are dropped — TLS is handled via
-    connect_args in get_engine().
+      * Turso / libSQL — set TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN), or pass a
+        ``libsql://…`` / ``sqlite+libsql://…`` value as DATABASE_URL. Rewritten to
+        the ``sqlite+libsql://host/?authToken=…&secure=true`` form. Turso is
+        SQLite-compatible, so the schema runs unchanged.
+      * Postgres (Neon) — a ``postgres://…`` DATABASE_URL, rewritten to the
+        pure-Python ``postgresql+pg8000://…`` driver (libpq-only query args dropped;
+        TLS handled via connect_args in get_engine()).
 
-    Why this exists: the production app runs on Streamlit Community Cloud, whose
-    filesystem is ephemeral — a local SQLite file is wiped on every restart, losing
-    all runtime data. A managed Postgres (Neon) persists across restarts. pg8000 is
-    a pure-Python driver, so it installs on any Python version with no build step
-    (unlike the native libsql/psycopg drivers)."""
-    raw = os.environ.get("DATABASE_URL", "").strip()
-    if not raw:
-        try:
-            import streamlit as st
-            raw = str(st.secrets.get("DATABASE_URL", "")).strip()
-        except Exception:
-            pass
+    Why this exists: the production host has an ephemeral filesystem — a local
+    SQLite file is wiped on every restart, losing all runtime data. A managed Turso
+    (or Postgres) database persists across restarts."""
+    turso = _env("TURSO_DATABASE_URL")
+    raw = _env("DATABASE_URL")
+    # Turso may also arrive through DATABASE_URL.
+    if not turso and raw.startswith(("libsql://", "sqlite+libsql://")):
+        turso, raw = raw, ""
+    if turso:
+        return _build_libsql_url(turso, _env("TURSO_AUTH_TOKEN"))
     if not raw:
         return ""
     from urllib.parse import urlsplit, urlunsplit
@@ -71,16 +97,20 @@ def get_engine() -> Engine:
     if _engine is None:
         url = _remote_db_url()
         if url:
-            connect_args = {}
+            # pool_pre_ping: serverless DBs (Neon free tier, Turso) suspend idle
+            # connections; pre-ping silently reconnects instead of erroring.
             if url.startswith("postgresql"):
                 import ssl
-                connect_args["ssl_context"] = ssl.create_default_context()
-            # pool_pre_ping: serverless Postgres (Neon free tier) suspends idle
-            # connections; pre-ping silently reconnects instead of erroring.
-            _engine = create_engine(
-                url, future=True, connect_args=connect_args, pool_pre_ping=True
-            )
-            _dialect = _engine.dialect.name
+                _engine = create_engine(
+                    url, future=True, pool_pre_ping=True,
+                    connect_args={"ssl_context": ssl.create_default_context()},
+                )
+                _dialect = "postgresql"
+            else:
+                # Turso / libSQL — SQLite-compatible via the sqlalchemy-libsql
+                # dialect. No local SQLite PRAGMAs (managed remote) and no PG shims.
+                _engine = create_engine(url, future=True, pool_pre_ping=True)
+                _dialect = "sqlite"
             _is_remote = True
         else:
             _engine = create_engine(f"sqlite:///{DB_PATH}", future=True)
@@ -148,13 +178,18 @@ def _run_schema():
     get_engine()  # ensure the engine is bound so _dialect reflects the target DB
     with open(_SCHEMA_FILE, "r", encoding="utf-8") as f:
         sql = f.read()
-    if _dialect == "postgresql":
-        # Install SQLite-ism shims first (schema defaults call datetime()), then run
-        # the dialect-translated DDL statement by statement.
+    if _is_remote:
+        # Remote DB (Postgres OR Turso/libSQL): run through the engine, one
+        # statement at a time (no sqlite3.connect to a remote URL). Postgres needs
+        # the SQLite-ism shims + DDL translation; Turso is SQLite, so it runs as-is.
         with get_engine().begin() as conn:
-            for shim in _PG_SHIMS:
-                conn.execute(text(shim))
-            for stmt in _split_sql_statements(_to_pg(sql)):
+            if _dialect == "postgresql":
+                for shim in _PG_SHIMS:
+                    conn.execute(text(shim))
+                stmts = _split_sql_statements(_to_pg(sql))
+            else:
+                stmts = _split_sql_statements(sql)
+            for stmt in stmts:
                 conn.execute(text(stmt))
     else:
         # Local SQLite: executescript handles comments + multiple statements natively.

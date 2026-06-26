@@ -935,6 +935,10 @@ function LicenseTab() {
   }, []);
 
   const load = useCallback(() => {
+    // Status / records / SMTP are super-admin-only endpoints. An admin (super-admin's
+    // child) only sees — and only needs — the Redeem section, so skip those calls for
+    // non-super to avoid noisy 403s.
+    if (!canGenerate) return;
     refreshStatus();
     apiGet<LicenseRow[]>("/api/licenses").then(setRows).catch(() => {});
     apiGet<any>("/api/smtp")
@@ -949,7 +953,7 @@ function LicenseTab() {
         setSmtpConfigured(!!d.is_configured);
       })
       .catch(() => {});
-  }, [refreshStatus]);
+  }, [refreshStatus, canGenerate]);
   useEffect(load, [load]);
 
   async function generate() {
@@ -973,7 +977,7 @@ function LicenseTab() {
         { key: redeemKey }
       );
       setRedeemKey("");
-      refreshStatus();
+      if (canGenerate) refreshStatus();
       setRedeemMsg({
         ok: true,
         m: `${f(t, "year", "Year")} ${r.year} ${f(t, "activated", "activated")}`,
@@ -1008,6 +1012,7 @@ function LicenseTab() {
     <div className="space-y-4">
       <Notice ok={msg.ok} msg={msg.m} />
 
+      {canGenerate && (
       <SectionCard title={f(t, "license_status", "License Status")} icon="workspace_premium">
         <div className="text-sm">
           {f(t, "licensed_until", "Licensed until year")}:{" "}
@@ -1036,6 +1041,7 @@ function LicenseTab() {
           </button>
         </div>
       </SectionCard>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {canGenerate && (
@@ -1076,6 +1082,9 @@ function LicenseTab() {
 
         {canRedeem && (
           <SectionCard title={f(t, "redeem_key", "Redeem License Key")} icon="key">
+            <div className="text-xs text-muted">
+              {f(t, "redeem_help", "Enter the license key your super-admin sent you to activate the next year's calendar.")}
+            </div>
             <div className="flex items-end gap-3">
               <Field label={f(t, "license_key", "License Key")} full>
                 <input
@@ -1103,6 +1112,7 @@ function LicenseTab() {
         )}
       </div>
 
+      {canGenerate && (
       <SectionCard title={f(t, "license_records", "License Records")} icon="receipt_long">
         <div className="flex justify-end">
           <button className="btn btn-primary" onClick={() => setAdding(true)}>
@@ -1159,7 +1169,9 @@ function LicenseTab() {
           </table>
         </div>
       </SectionCard>
+      )}
 
+      {canGenerate && (
       <SectionCard title={f(t, "smtp_settings", "Email (SMTP)")} icon="outgoing_mail">
         <div className="text-xs">
           <span className={`badge ${smtpConfigured ? "badge-ok" : "badge-archived"}`}>
@@ -1199,6 +1211,7 @@ function LicenseTab() {
           {f(t, "update_btn", "Save")}
         </button>
       </SectionCard>
+      )}
 
       {adding && (
         <Modal title={f(t, "add_license", "Add License")} onClose={() => setAdding(false)}>
@@ -1818,7 +1831,7 @@ export default function SettingsPage() {
       { id: "profile", label: f(t, "tab_profile", "Profile"), icon: "person", show: true },
       { id: "users", label: f(t, "tab_users", "Users"), icon: "group", show: can(user, "manage_users") },
       { id: "business", label: f(t, "tab_business", "Business"), icon: "storefront", show: can(user, "manage_users") },
-      { id: "license", label: f(t, "tab_license", "License"), icon: "workspace_premium", show: can(user, "edit_business_settings") },
+      { id: "license", label: f(t, "tab_license", "License"), icon: "workspace_premium", show: roleLevel(user) >= 2 },
       { id: "data", label: f(t, "tab_data", "Data"), icon: "database", show: can(user, "edit_business_settings") },
       { id: "activity", label: f(t, "tab_activity", "Activity"), icon: "history", show: can(user, "manage_users") },
     ];
@@ -1855,7 +1868,7 @@ export default function SettingsPage() {
       {tab === "profile" && <ProfileTab />}
       {tab === "users" && can(user, "manage_users") && <UsersTab />}
       {tab === "business" && can(user, "manage_users") && <BusinessTab />}
-      {tab === "license" && can(user, "edit_business_settings") && <LicenseTab />}
+      {tab === "license" && roleLevel(user) >= 2 && <LicenseTab />}
       {tab === "data" && can(user, "edit_business_settings") && <DataTab />}
       {tab === "activity" && can(user, "manage_users") && <ActivityTab />}
     </div>

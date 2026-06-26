@@ -15,7 +15,10 @@ PyJWT==2.10.1                 # stateless session tokens (replaces remember-me c
 
 # --- Database (shared with the Streamlit app) ---
 SQLAlchemy==2.0.51
-pg8000==1.31.2               # pure-Python Postgres driver for Neon (prod). Dormant
+sqlalchemy-libsql==0.2.0     # Turso/libSQL dialect (sqlite+libsql://) for prod.
+                            # Linux/macOS wheels only — installs on Render/Railway;
+                            # on Windows dev it's unused (dev uses local SQLite).
+pg8000==1.31.2               # pure-Python Postgres driver (alt. backend). Dormant
                             # locally (dev uses the bundled SQLite file).
 
 # --- Business-logic deps reused verbatim ---

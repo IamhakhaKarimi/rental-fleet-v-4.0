@@ -32,6 +32,7 @@ export default function DashboardPage() {
   const available = vehicles.filter((v) => v.status === "Available");
   const roleLabel = user ? t(user.role_label_key) : "";
   const canBook = can(user, "create_reservation");
+  const isStaff = can(user, "view_management");
   const ql = q.trim().toLowerCase();
   const fleetShown = ql
     ? vehicles.filter((v) =>
@@ -40,6 +41,9 @@ export default function DashboardPage() {
         )
       )
     : vehicles;
+
+  // Visitors get a customer-facing bento browse — no timeline, fleet table or KPIs.
+  if (user && !isStaff) return <VisitorHome />;
 
   return (
     <div className="space-y-7">
@@ -159,4 +163,9 @@ export default function DashboardPage() {
               setBookingCar(null);
               load();
             }}
- 
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}

@@ -46,7 +46,7 @@ export function VisitorHome() {
   const CarTile = ({ v, wide }: { v: Vehicle; wide?: boolean }) => (
     <div
       className={`bento-in card p-4 flex transition-transform duration-200 hover:-translate-y-0.5 ${
-        wide ? "md:col-span-2 flex-row items-center gap-4" : "flex-col"
+        wide ? "col-span-2 flex-row items-center gap-4" : "flex-col"
       }`}
       style={stagger()}
     >
@@ -117,7 +117,7 @@ export function VisitorHome() {
         </div>
 
         {/* Contact CTA — spans the two stat columns */}
-        <div className="bento-in card md:col-span-2 p-5 flex items-center gap-4" style={stagger()}>
+        <div className="bento-in card col-span-2 p-5 flex items-center gap-4" style={stagger()}>
           <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0" style={ink}>
             <span className="msr text-[22px]">call</span>
           </div>

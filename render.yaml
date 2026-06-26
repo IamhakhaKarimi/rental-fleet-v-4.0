@@ -1,0 +1,25 @@
+# Render blueprint for the FastAPI backend (https://render.com).
+# Railway works the same way — point it at backend/Dockerfile and set the same env.
+# The Next.js frontend deploys separately on Vercel (see README).
+services:
+  - type: web
+    name: balkan-fleet-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    envVars:
+      # Neon Postgres connection string (postgresql://user:pass@host/db). Required.
+      - key: DATABASE_URL
+        sync: false
+      # Long random secret for signing session JWTs. Required.
+      - key: JWT_SECRET
+        generateValue: true
+      # Comma-separated allowed frontend origins, e.g. https://balkan-fleet.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      # Cross-site cookie needs Secure + SameSite=None (frontend ≠ API origin).
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: "none"

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Balkan Car Rentals — Fleet Console v4.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#FAFAF9; --surface:#F4F3F1; --text:#1A1C1E; --muted:#6B7280;
+    --border:#EAE8E3; --accent:#1A1C1E; --accent-hover:#3F3F46;
+    --ok:#1F9D55; --danger:#DC2626; --warn:#71717A;
+    --neo-light:#ffffff; --neo-dark:#e4e2dc;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .card{
+    width:100%; max-width:440px; background:var(--bg);
+    border-radius:22px; padding:30px 28px;
+    box-shadow:7px 7px 18px var(--neo-dark), -7px -7px 18px var(--neo-light);
+  }
+  .brand{display:flex; align-items:center; gap:12px; margin-bottom:6px}
+  .mark{
+    width:46px; height:46px; border-radius:13px; background:var(--accent);
+    color:var(--bg); display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:1.4rem;
+  }
+  .brand h1{font-size:1.15rem; font-weight:700; margin:0; line-height:1.15}
+  .brand .tag{font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; color:var(--muted)}
+  .sub{color:var(--muted); font-size:.86rem; margin:14px 2px 18px}
+  .status{display:flex; flex-direction:column; gap:9px; margin-bottom:20px}
+  .row{
+    display:flex; align-items:center; gap:11px; padding:11px 14px;
+    background:var(--surface); border:1px solid var(--border); border-radius:13px;
+  }
+  .dot{width:9px; height:9px; border-radius:999px; background:var(--warn); flex:none;
+       box-shadow:0 0 0 4px color-mix(in oklab, var(--warn) 18%, transparent); transition:.25s}
+  .dot.up{background:var(--ok); box-shadow:0 0 0 4px color-mix(in oklab, var(--ok) 18%, transparent)}
+  .dot.down{background:var(--danger); box-shadow:0 0 0 4px color-mix(in oklab, var(--danger) 18%, transparent)}
+  .row .name{font-weight:600; font-size:.88rem}
+  .row .url{color:var(--muted); font-size:.72rem; margin-left:auto}
+  .row .state{font-size:.72rem; font-weight:600; color:var(--muted); min-width:62px; text-align:right}
+  .btn{
+    display:flex; align-items:center; justify-content:center; gap:8px; width:100%;
+    text-decoration:none; font-weight:600; font-size:.95rem; cursor:pointer;
+    border-radius:13px; padding:14px; border:1px solid var(--accent);
+    background:var(--accent); color:var(--bg); transition:.15s;
+  }
+  .btn:hover{background:var(--accent-hover); border-color:var(--accent-hover); transform:translateY(-1px)}
+  .btn.ghost{background:transparent; color:var(--text); border-color:var(--border)}
+  .btn.ghost:hover{background:var(--surface)}
+  .links{display:flex; gap:10px; margin-top:11px}
+  .links .btn{padding:10px; font-size:.8rem}
+  .hint{
+    margin-top:18px; font-size:.74rem; color:var(--muted);
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:11px 13px;
+  }
+  .hint b{color:var(--text)}
+  details{margin-top:14px; font-size:.78rem; color:var(--muted)}
+  details summary{cursor:pointer; font-weight:600; color:var(--text)}
+  pre{
+    background:var(--surface); border:1px solid var(--border); border-radius:11px;
+    padding:11px 13px; overflow:auto; font-size:.72rem; line-height:1.6;
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace; color:var(--text); margin:9px 0 0;
+  }
+  .foot{text-align:center; color:var(--muted); font-size:.66rem; margin-top:18px}
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <div class="mark" id="mark">B</div>
+      <div>
+        <h1 id="bizname">Balkan Car Rentals</h1>
+        <div class="tag">Fleet Console · v4.0</div>
+      </div>
+    </div>
+    <p class="sub">Open the console below. The launcher checks both servers live and lights up when they're ready.</p>
+
+    <div class="status">
+      <div class="row">
+        <span class="dot" id="dot-web"></span>
+        <span class="name">Web app</span>
+        <span class="url">localhost:3000</span>
+        <span class="state" id="state-web">checking…</span>
+      </div>
+      <div class="row">
+        <span class="dot" id="dot-api"></span>
+        <span class="name">API</span>
+        <span class="url">localhost:8001</span>
+        <span class="state" id="state-api">checking…</span>
+      </div>
+    </div>
+
+    <a class="btn" href="http://localhost:3000" target="_blank" rel="noopener">
+      Open Fleet Console →
+    </a>
+    <div class="links">
+      <a class="btn ghost" href="http://localhost:8001/docs" target="_blank" rel="noopener">API Docs</a>
+      <a class="btn ghost" href="http://localhost:8001/api/health" target="_blank" rel="noopener">API Health</a>
+    </div>
+
+    <div class="hint">Default login: <b>admin</b> / <b>admin</b> — change it in Settings → Profile.</div>
+
+    <details>
+      <summary>Servers not running? Start them</summary>
+      <p style="margin:9px 2px 0">Double-click <b>start.bat</b> in this folder, or run:</p>
+      <pre>cd backend
+python -m uvicorn api.main:app --port 8001
+
+cd ../frontend
+npm run dev</pre>
+    </details>
+
+    <div class="foot" id="checked"></div>
+  </main>
+
+<script>
+  function ping(url){
+    return new Promise(function(resolve){
+      var ctrl = new AbortController();
+      var to = setTimeout(function(){ ctrl.abort(); }, 2500);
+      // no-cors: we only care that *something* answered (opaque response = up).
+      fetch(url, { mode:"no-cors", signal: ctrl.signal, cache:"no-store" })
+        .then(function(){ clearTimeout(to); resolve(true); })
+        .catch(function(){ clearTimeout(to); resolve(false); });
+    });
+  }
+  function set(id, up){
+    var dot = document.getElementById("dot-"+id);
+    var st = document.getElementById("state-"+id);
+    dot.className = "dot " + (up ? "up" : "down");
+    st.textContent = up ? "running" : "offline";
+    st.style.color = up ? "var(--ok)" : "var(--danger)";
+  }
+  async function check(){
+    var web = await ping("http://localhost:3000");
+    var api = await ping("http://localhost:8001/api/health");
+    set("web", web); set("api", api);
+    document.getElementById("checked").textContent =
+      "last checked " + new Date().toLocaleTimeString();
+  }
+  // Pull the real business name from the API once it's up (nice touch).
+  function loadBrand(){
+    fetch("http://localhost:8001/api/business/name", { cache:"no-store" })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d && d.business_name){ document.getElementById("bizname").textContent = d.business_name; }
+        if(d && d.initial){ document.getElementById("mark").textContent = d.initial; }
+      })
+      .catch(function(){});
+  }
+  check(); loadBrand();
+  setInterval(check, 4000);
+  setInterval(loadBrand, 12000);
+</script>
+</body>
+</html>

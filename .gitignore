@@ -1,0 +1,45 @@
+# ───────────── Secrets & runtime data — NEVER commit ─────────────
+# Real customer data lives in the SQLite DB. Keep every DB artifact out of git.
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.bak
+# Env files with real values (the *.example templates ARE committed).
+.env
+.env.*
+!*.example
+# Local dev server logs.
+*.log
+# DB recovery / secrets staging (original project convention).
+_db_recovery/
+.streamlit/secrets.toml
+
+# ───────────── Python (backend) ─────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ───────────── Node / Next.js (frontend) ─────────────
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+.vercel/
+
+# ───────────── OS / editor ─────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,421 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===========================================================================
+   Design tokens — carried verbatim from the Streamlit app's ui/theme.py.
+   The whole app themes off these CSS variables; night mode swaps the palette.
+   Defaults equal the original tokens, so v4.0 looks identical until customised.
+   =========================================================================== */
+:root {
+  --bg: #FAFAF9;
+  --surface: #F4F3F1;
+  --text: #1A1C1E;
+  --muted: #6B7280;
+  --border: #EAE8E3;
+  --accent: #1A1C1E;
+  --accent-hover: #3F3F46;
+  --ok: #1A1C1E;
+  --info: #52525B;
+  --warn: #71717A;
+  --danger: #DC2626;
+  --archived: #9CA3AF;
+
+  /* Rental due-state colours for the occupancy calendar + notification bell.
+     Kept SEPARATE from the themeable monochrome --warn (which paints Maintenance/
+     Garage status badges) so a late return reads as a true alert (red) and an
+     approaching one as a true warning (amber). --cal-rowsep is the black hairline
+     drawn between vehicle rows. */
+  --cal-warn: #EA580C;      /* alert orange — return due within 24h (bar/badge fill) */
+  --cal-warn-ink: #C2410C;  /* darker orange for warn TEXT/icons on light surfaces (≥4.5:1) */
+  --cal-rowsep: #1A1C1E;    /* black horizontal row separator between timeline rows */
+  /* Vertical date-column separators — dark, clearly visible (matches the printed
+     calendar grid). Day = medium, month = strong; both derive from --cal-rowsep so
+     they invert correctly in night mode. */
+  --cal-grid: color-mix(in oklab, var(--cal-rowsep) 38%, transparent);
+  --cal-grid-strong: color-mix(in oklab, var(--cal-rowsep) 70%, transparent);
+
+  /* Neumorphism shadow pair, derived from the light background. */
+  --neo-light: #ffffff;
+  --neo-dark: #e4e2dc;
+
+  --font-display: var(--font-jakarta), "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body: var(--font-jakarta), "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
+/* Night mode (per-session toggle). Mirrors theme.resolve_theme's _DARK merge +
+   contrast-lift: near-black accent/status colours lift so they stay visible.
+   Selector is `:root.dark` (not `.dark`) on purpose: ThemeProvider injects the
+   brand theme as a runtime `<style>:root{…}` into <head> AFTER this sheet, and an
+   equal-specificity `.dark` would lose the source-order tie — so night mode would
+   never override the light brand tokens. `:root.dark` (0,2,0) outranks `:root`. */
+:root.dark {
+  --bg: #17181A;
+  --surface: #232427;
+  --text: #E8E6E3;
+  --muted: #A1A1AA;
+  --border: #34343A;
+  --accent: #E8E6E3;
+  --accent-hover: #FFFFFF;
+  --ok: #D4D4D8;
+  --info: #D4D4D8;
+  --warn: #D4D4D8;
+  --danger: #F87171;
+  --archived: #D4D4D8;
+
+  /* Night-mode due-state colours: brighter orange + a light separator (a black
+     line would vanish on the dark canvas). */
+  --cal-warn: #FB923C;
+  --cal-warn-ink: #FB923C;
+  --cal-rowsep: #5A5B62;
+  --cal-grid: color-mix(in oklab, var(--cal-rowsep) 60%, transparent);
+  --cal-grid-strong: color-mix(in oklab, var(--cal-rowsep) 95%, transparent);
+
+  --neo-light: #2b2c30;
+  --neo-dark: #141517;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* Material Symbols Rounded (loaded via <link> in layout). */
+.msr {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "opsz" 24;
+  vertical-align: middle;
+  user-select: none;
+}
+
+@layer components {
+  /* Minimalist surfaces ---------------------------------------------------- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    min-height: 94px;
+    padding: 13px 15px 15px;
+  }
+  .kpi-label {
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .kpi-value {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 2rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  /* Icon chip on the stat cards — consistent theme-aware background for all tiles. */
+  .kpi-chip {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in oklab, var(--text) 8%, transparent);
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .kpi-chip.accent {
+    background: color-mix(in oklab, var(--text) 14%, transparent);
+    color: var(--text);
+  }
+
+  /* Buttons ---------------------------------------------------------------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-weight: 500;
+    font-size: 0.85rem;
+    border-radius: 10px;
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    transition: transform 0.06s ease, background 0.15s ease, box-shadow 0.15s ease;
+    cursor: pointer;
+  }
+  .btn:hover { background: var(--bg); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* Status badge — token classes from STATUS_TOKEN ------------------------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .badge::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  .badge-ok       { color: var(--ok);       background: color-mix(in oklab, var(--ok) 12%, transparent); }
+  .badge-info     { color: var(--info);     background: color-mix(in oklab, var(--info) 14%, transparent); }
+  .badge-warn     { color: var(--warn);     background: color-mix(in oklab, var(--warn) 16%, transparent); }
+  .badge-danger   { color: var(--danger);   background: color-mix(in oklab, var(--danger) 14%, transparent); }
+  .badge-archived { color: var(--archived); background: color-mix(in oklab, var(--archived) 18%, transparent); }
+
+  /* ======================================================================
+     NEOMORPHIC occupancy timeline (the calendar). Soft raised panel + bars.
+     ====================================================================== */
+  .neo-panel {
+    background: var(--bg);
+    border-radius: 20px;
+    box-shadow: 6px 6px 16px var(--neo-dark), -6px -6px 16px var(--neo-light);
+    padding: 18px;
+  }
+  .neo-track {
+    position: relative;
+    background: var(--bg);
+    border-radius: 12px;
+    box-shadow: inset 3px 3px 7px var(--neo-dark), inset -3px -3px 7px var(--neo-light);
+    height: 34px;
+  }
+  .neo-bar {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    border-radius: 9px;
+    box-shadow: 3px 3px 7px var(--neo-dark), -3px -3px 7px var(--neo-light);
+    border: 1.5px solid color-mix(in oklab, var(--bar) 70%, #000 30%);
+    background:
+      repeating-linear-gradient(45deg,
+        color-mix(in oklab, var(--bar) 86%, #fff) 0 6px,
+        color-mix(in oklab, var(--bar) 78%, #fff) 6px 12px);
+    display: flex;
+    align-items: center;
+    padding: 0 9px;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: color-mix(in oklab, var(--bar) 30%, #000 70%);
+  }
+  .now-line {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    background: var(--danger);
+    box-shadow: 0 0 6px color-mix(in oklab, var(--danger) 60%, transparent);
+    z-index: 2;
+  }
+  /* Active-rental highlight — neumorphic soft rounded card (views/reservations). */
+  .active-hl {
+    background: var(--surface);
+    border-radius: 16px;
+    box-shadow: 5px 5px 12px var(--neo-dark), -5px -5px 12px var(--neo-light);
+    border-left: 4px solid var(--hl, var(--accent));
+    padding: 14px 16px;
+  }
+
+  /* Visitor hero ----------------------------------------------------------- */
+  .visitor-hero {
+    background: linear-gradient(135deg, #1A1C1E, #3F3F46);
+    color: #fff;
+    border-radius: 18px;
+    padding: 34px 30px;
+  }
+}
+
+/* Inputs — minimalist; ALL-CAPS personal-info inputs handled per-field in JS. */
+input, select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 9px 11px;
+  font-size: 0.9rem;
+  width: 100%;
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+.uppercase-input { text-transform: uppercase; }
+
+/* Responsive (≤640px): stack, clamp, larger tap targets — matches theme.py. */
+@media (max-width: 640px) {
+  .kpi-value { font-size: 1.6rem; }
+  .btn { min-height: 44px; white-space: normal; }
+}
+
+/* Visitor bento tiles — gentle staggered fade-up on load. Base state is visible
+   (opacity 1), so if the animation is suppressed (reduced-motion rule below sets
+   animation:none) the tiles still render — never a blank reveal. */
+@keyframes bento-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.bento-in { animation: bento-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* ===========================================================================
+   Calendar timeline — day/month/year legends + white event bars with a faded
+   black border (sits inside the neomorphic .neo-panel container).
+   =========================================================================== */
+.cal-row {
+  position: relative;
+  height: 34px;                         /* taller rows -> ~25% taller event bars */
+  border-bottom: 1.5px solid var(--cal-rowsep);   /* black row separator (per request) */
+}
+.cal-row:last-child { border-bottom: 1.5px solid var(--cal-rowsep); }
+/* Month separators — strong dark vertical rule. */
+.cal-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--cal-grid-strong);
+}
+/* Day separators — dark, clearly visible (matches the printed calendar grid). */
+.cal-gridline-faint {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--cal-grid);
+}
+/* "Now" marker — black ink rule (matches the NOW pill + the printed calendar).
+   Kept monochrome so red/orange stay reserved for overdue/due-soon status. */
+.cal-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  z-index: 3;
+  box-shadow: 0 0 5px color-mix(in oklab, var(--accent) 30%, transparent);
+}
+/* The "NOW" pill that sits at the top of the now-line in the axis. */
+.cal-now-pill {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  z-index: 5;
+  white-space: nowrap;
+}
+.cal-bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+  background: #ffffff;                 /* white event bar (per request) */
+  border: 1px solid rgba(0, 0, 0, 0.2); /* faded black border */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #1a1c1e;
+  overflow: hidden;
+  white-space: nowrap;
+  z-index: 2;
+}
+.cal-bar:hover {
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16);
+  transform: translateY(-0.5px);
+  z-index: 4;
+}
+/* The client name is pinned to the bar's visible left edge as the strip scrolls
+   (translated imperatively in Timeline.tsx). max-width keeps its measured width
+   bounded by the bar so the slide clamp stays correct; will-change hints the GPU. */
+.cal-bar-name {
+  max-width: 100%;
+  will-change: transform;
+}
+/* Status-tinted bars: a late return turns solid red (alert), one due within 24h
+   turns solid amber (warning); normal active rentals stay the neutral white bar
+   and closed/returned ones recede to grey. The whole bar carries the colour now
+   (not just a dot) so the rental's state reads at a glance. */
+.cal-bar--warn {
+  background: var(--cal-warn);
+  border-color: color-mix(in oklab, var(--cal-warn) 68%, #000);
+  color: #1a1c1e;
+}
+.cal-bar--danger {
+  background: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 68%, #000);
+  color: #ffffff;
+}
+.cal-bar--done {
+  background: color-mix(in oklab, var(--archived) 28%, var(--surface));
+  border-color: color-mix(in oklab, var(--archived) 55%, transparent);
+  color: var(--muted);
+}
+.cal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.seg-btn {
+  padding: 6px 12px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+}

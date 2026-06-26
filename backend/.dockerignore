@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+fleet.db
+fleet.db-wal
+fleet.db-shm
+.env
+.venv/
+venv/
+_db_recovery/

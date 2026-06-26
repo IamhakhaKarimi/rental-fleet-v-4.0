@@ -1,0 +1,14 @@
+Car ID,Make/Model,Year,License Plate,Color,Current Mileage,Status,Base Daily Rate (€),Notes,Client Maintenance Charge
+C001,Jetta OL,2012,AB069OL,FÜME,10302,Available,30,will return soon,0.0
+C002,Jetta SA,2012,AB853SA,GRİ,0,Available,30,Comes soon,0.0
+C003,POLO,2012,AB027UH,BEYAZ,0,Rented,30,,0.0
+C004,TIQUAN,2009,AB034UH,SİYAH,0,Rented,30,,0.0
+C005,TOURA 6RI (7 KİŞİ),2006,AB--K,FÜME,0,Rented,40,,0.0
+C006,OPEL (Manual),2015,AB992PD,KAHVE,0,Rented,30,,0.0
+C007,TOURAN (7 KİŞİ),2006,AB--GF,SİYAH,0,In Garage,30,,0.0
+C008,TOURAN (7 KİŞİ),2008,AB--PH,FÜME GRİ,0,Rented,30,,0.0
+C009,TOURAN,2008,AB--ZR,MAVİ,0,Rented,30,,0.0
+C010,JETTA,2012,AB--ZO,FÜME GRİ,0,Available,30,,0.0
+C011,HYUNDAI,2012,AB285ZZ,BEYAZ,0,In Garage,30,,0.0
+C012,RENAULT,2012,AB334ZG,BEYAZ,0,In Garage,30,,0.0
+C013,VOLVO,2012,AB963TL,BEYAZ,0,In Garage,30,,0.0

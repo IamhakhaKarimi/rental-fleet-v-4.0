@@ -1,0 +1,26 @@
+# Balkan Car Rentals — FastAPI backend dependencies.
+# Run from the repo root: uvicorn api.main:app
+#
+# The backend REUSES the existing config/core/data/services/ui Python packages, so
+# it needs their runtime deps too (SQLAlchemy, bcrypt, pandas, fpdf2, segno, Pillow)
+# — but NOT streamlit / extra-streamlit-components (the UI layer is replaced by
+# Next.js). i18n/invoice modules import streamlit lazily so the API stays lean.
+
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20      # multipart/form-data (photo + logo/stamp uploads)
+pydantic-settings==2.7.1
+PyJWT==2.10.1                 # stateless session tokens (replaces remember-me cookie)
+
+# --- Database (shared with the Streamlit app) ---
+SQLAlchemy==2.0.51
+pg8000==1.31.2               # pure-Python Postgres driver for Neon (prod). Dormant
+                            # locally (dev uses the bundled SQLite file).
+
+# --- Business-logic deps reused verbatim ---
+bcrypt==5.0.0               # password hashing (services/auth_service.py)
+pandas==3.0.2              # CSV seed import + a couple of rollup helpers
+fpdf2==2.8.7               # invoice + finance-report PDFs (ui/pdf.py)
+segno==1.6.6               # invoice QR codes (ui/invoice_links.py)
+Pillow==11.0.0            # photo/logo/stamp encoding (ui/photos.py)

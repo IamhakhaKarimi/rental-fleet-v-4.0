@@ -9,7 +9,14 @@ services:
     dockerContext: ./backend
     healthCheckPath: /api/health
     envVars:
-      # Neon Postgres connection string (postgresql://user:pass@host/db). Required.
+      # ── Database: Turso / libSQL (chosen) ──────────────────────────────────
+      # From `turso db show <db> --url`  (libsql://<db>-<org>.turso.io)
+      #  and  `turso db tokens create <db>`.  Tables auto-create on first boot.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      # ── OR Postgres (Neon) instead — set this, leave TURSO_* blank ──────────
       - key: DATABASE_URL
         sync: false
       # Long random secret for signing session JWTs. Required.

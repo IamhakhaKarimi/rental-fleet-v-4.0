@@ -61,6 +61,14 @@ class CloseIn(BaseModel):
     contract_signed: bool = False
 
 
+class RateIn(BaseModel):
+    daily_rate_euros: float
+
+
+class VehicleSwapIn(BaseModel):
+    vehicle_id: str
+
+
 # ── Reads ───────────────────────────────────────────────────────────────────
 @router.get("/active")
 def active(user: dict = Depends(require("view_management"))) -> list[dict]:
@@ -122,7 +130,7 @@ def create(body: BookingIn, user: dict = Depends(require("create_reservation")))
 
 
 @router.put("/{deal_id}/rate")
-def update_rate(deal_id: str, body: "RateIn",
+def update_rate(deal_id: str, body: RateIn,
                 user: dict = Depends(require("create_reservation"))) -> dict:
     total = rrepo.update_rental_rate(deal_id, _cents(body.daily_rate_euros))
     if total < 0:
@@ -132,7 +140,7 @@ def update_rate(deal_id: str, body: "RateIn",
 
 
 @router.put("/{deal_id}/vehicle")
-def change_vehicle(deal_id: str, body: "VehicleSwapIn",
+def change_vehicle(deal_id: str, body: VehicleSwapIn,
                    user: dict = Depends(require("create_reservation"))) -> dict:
     if not rrepo.change_rental_vehicle(deal_id, body.vehicle_id):
         raise HTTPException(409, detail="no_cars")
@@ -159,3 +167,4 @@ def cancel(deal_id: str, user: dict = Depends(require("cancel_reservation"))) ->
     rrepo.cancel_rental(deal_id)
     audit_service.record(user, "cancel_rental", "rental", deal_id)
     return {"ok": True}
+

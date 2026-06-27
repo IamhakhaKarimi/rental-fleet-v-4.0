@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App code (config/core/data/services/ui/api + assets/fonts + seed CSV).
 COPY . .
 
-# Don't ship a dev SQLite DB; production binds to Neon Postgres via DATABASE_URL.
+# Don't ship a dev SQLite DB; production binds to Turso/libSQL (TURSO_DATABASE_URL)
+# or Postgres (DATABASE_URL). Tables are created on first boot by init_db().
 RUN rm -f fleet.db fleet.db-wal fleet.db-shm
 
 ENV PORT=8000

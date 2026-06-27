@@ -69,17 +69,18 @@ export function Bell({ expanded }: { expanded?: boolean }) {
   // --warn status token) so an approaching due date actually reads as a warning.
   // Text/icon colour needs ≥4.5:1 on the light sidebar, so the warning uses the
   // darker --cal-warn-ink (the brighter --cal-warn is a fill colour for the badge).
-  const toneColor = overdueN > 0 ? "var(--danger)" : dueSoonN > 0 ? "var(--cal-warn-ink)" : "var(--text)";
-  const badgeColor = overdueN > 0 ? "var(--danger)" : "var(--cal-warn)";
-  // Badge text: white reads on red; the orange fill takes dark ink for contrast.
+  // Due-soon now shows a soft "faded yellow" highlight on the bell (overdue stays
+  // red). The highlight + legible ink come from the theme-aware .bell-warn class.
+  const toneClass = overdueN > 0 ? "bell-alert" : dueSoonN > 0 ? "bell-warn" : "";
+  const badgeColor = overdueN > 0 ? "var(--danger)" : "#EAB308";
+  // Badge text: white reads on red; the yellow fill takes dark ink for contrast.
   const badgeText = overdueN > 0 ? "#ffffff" : "#1a1c1e";
 
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        style={{ color: toneColor }}
-        className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] hover:bg-[rgba(17,24,39,0.05)] ${
+        className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] hover:bg-[rgba(17,24,39,0.05)] ${toneClass} ${
           expanded ? "" : "justify-center"
         }`}
         aria-label="Reminders"
@@ -120,7 +121,7 @@ export function Bell({ expanded }: { expanded?: boolean }) {
           )}
           {!!data?.due_soon.length && (
             <section>
-              <h3 className="text-sm font-semibold flex items-center gap-1.5 mb-1" style={{ color: "var(--cal-warn-ink)" }}>
+              <h3 className="text-sm font-semibold flex items-center gap-1.5 mb-1" style={{ color: "var(--bell-warn-ink)" }}>
                 <span className="msr text-[18px]">schedule</span>
                 Returns due within {data.due_soon_hours} h ({data.due_soon.length})
               </h3>

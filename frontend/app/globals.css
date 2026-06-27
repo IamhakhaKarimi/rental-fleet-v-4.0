@@ -403,6 +403,14 @@ input:focus, select:focus, textarea:focus {
   border-color: color-mix(in oklab, var(--archived) 55%, transparent);
   color: var(--muted);
 }
+
+/* Notification bell tones. Due-soon shows a soft "faded yellow" highlight; overdue
+   stays red. Scoped to the bell (its own tokens) so the timeline's due-soon bars
+   keep their colour. --bell-warn-ink is the legible text/icon colour per mode. */
+:root { --bell-warn-bg: #FEF3C7; --bell-warn-ink: #854D0E; }
+:root.dark { --bell-warn-bg: rgba(234, 179, 8, 0.16); --bell-warn-ink: #FDE047; }
+.bell-warn { background: var(--bell-warn-bg); color: var(--bell-warn-ink); }
+.bell-alert { color: var(--danger); }
 .cal-dot {
   width: 7px;
   height: 7px;

@@ -30,6 +30,8 @@ function applyTheme(t: Record<string, string>) {
     "--warn": t.warning,
     "--danger": t.alert,
     "--archived": t.disabled,
+    "--bar-grad-start": t.bar_gradient_start,
+    "--bar-grad-end": t.bar_gradient_end,
   };
   let css = ":root{";
   for (const [k, v] of Object.entries(map)) if (v) css += `${k}:${v};`;

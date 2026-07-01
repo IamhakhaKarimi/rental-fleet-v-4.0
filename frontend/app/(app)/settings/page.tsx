@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiDel, apiGet, apiPost, apiPut, API_BASE } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n, useT } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { useTheme } from "@/lib/theme";
@@ -82,6 +83,7 @@ interface LangOption {
 
 function ProfileTab() {
   const t = useT();
+  const toast = useToast();
   const { refresh } = useAuth();
   const { setLang } = useI18n();
   const [p, setP] = useState<Profile | null>(null);
@@ -116,6 +118,7 @@ function ProfileTab() {
     try {
       await fn();
       setMsg({ ok: true, m: okMsg });
+      toast.success(okMsg);
     } catch (e: any) {
       setMsg({ ok: false, m: t(e?.key || "error") });
     }
@@ -253,6 +256,7 @@ interface AssignableRole {
 
 function UsersTab() {
   const t = useT();
+  const toast = useToast();
   const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<AssignableRole[]>([]);
   const [adding, setAdding] = useState(false);
@@ -267,10 +271,11 @@ function UsersTab() {
 
   const roleLabel = (key: string, fb: string) => (key ? f(t, key, fb) : fb);
 
-  async function act(fn: () => Promise<void>) {
+  async function act(fn: () => Promise<void>, okMsg?: string) {
     setMsg({ ok: true, m: "" });
     try {
       await fn();
+      if (okMsg) toast.success(okMsg);
       load();
     } catch (e: any) {
       setMsg({ ok: false, m: t(e?.key || "error") });
@@ -279,16 +284,23 @@ function UsersTab() {
 
   async function changeRole(u: UserRow, role: string) {
     if (role === u.role) return;
-    await act(() => apiPut(`/api/users/${encodeURIComponent(u.username)}/role`, { role }));
+    await act(
+      () => apiPut(`/api/users/${encodeURIComponent(u.username)}/role`, { role }),
+      f(t, "role_updated", "Role updated.")
+    );
   }
   async function toggleActive(u: UserRow) {
-    await act(() =>
-      apiPut(`/api/users/${encodeURIComponent(u.username)}/active`, { active: !u.is_active })
+    await act(
+      () => apiPut(`/api/users/${encodeURIComponent(u.username)}/active`, { active: !u.is_active }),
+      u.is_active ? f(t, "user_deactivated", "User deactivated.") : f(t, "user_activated", "User activated.")
     );
   }
   async function del(u: UserRow) {
     if (!confirm(`${f(t, "delete_btn", "Delete")}: ${u.username}?`)) return;
-    await act(() => apiDel(`/api/users/${encodeURIComponent(u.username)}`));
+    await act(
+      () => apiDel(`/api/users/${encodeURIComponent(u.username)}`),
+      f(t, "user_deleted", "User deleted.")
+    );
   }
   async function resetPw(u: UserRow) {
     setMsg({ ok: true, m: "" });
@@ -298,6 +310,7 @@ function UsersTab() {
       );
       if (r.sent) {
         setMsg({ ok: true, m: `${f(t, "recover_sent", "Email sent")}: ${r.recipient}` });
+        toast.success(`${f(t, "recover_sent", "Email sent")}: ${r.recipient}`);
       } else {
         setResetInfo({ user: u.username, pw: r.new_password });
       }
@@ -455,6 +468,7 @@ function AddUserForm({
   onDone: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const [f0, setF0] = useState({
     username: "",
     password: "",
@@ -475,6 +489,7 @@ function AddUserForm({
     setErr("");
     try {
       await apiPost("/api/users", f0);
+      toast.success(f(t, "user_added", "User added."));
       onDone();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -545,6 +560,7 @@ function ImageUploader({
   onChange: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [bust, setBust] = useState(Date.now());
 
@@ -555,9 +571,10 @@ function ImageUploader({
       fd.append("file", file);
       await api(uploadPath, { method: "POST", body: fd });
       setBust(Date.now());
+      toast.success(`${label} — ${f(t, "saved", "Saved")}`);
       onChange();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setBusy(false);
     }
@@ -566,9 +583,10 @@ function ImageUploader({
     setBusy(true);
     try {
       await apiDel(uploadPath);
+      toast.success(`${label} — ${f(t, "removed", "Removed")}`);
       onChange();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setBusy(false);
     }
@@ -625,9 +643,18 @@ const THEME_COLOR_KEYS: { key: string; label: string; fb: string }[] = [
   { key: "disabled", label: "theme_disabled", fb: "Disabled" },
   { key: "bg", label: "theme_bg", fb: "Background" },
 ];
+// The two colours mixed into the gradient painted on a reservation's timeline bar
+// / card header once its rental has started (see .cal-bar--started / .client-bar-
+// started in globals.css) — kept in their own list so they can render with a live
+// gradient preview instead of a single swatch.
+const BAR_GRADIENT_KEYS: { key: string; label: string; fb: string }[] = [
+  { key: "bar_gradient_start", label: "theme_bar_gradient_start", fb: "Started-rental bar — gradient start" },
+  { key: "bar_gradient_end", label: "theme_bar_gradient_end", fb: "Started-rental bar — gradient end" },
+];
 
 function ThemeDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const toast = useToast();
   const { refreshTheme } = useTheme();
   const [data, setData] = useState<ThemeData | null>(null);
   const [v, setV] = useState<Record<string, string>>({});
@@ -651,6 +678,7 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
     try {
       await apiPut("/api/settings/theme", v);
       refreshTheme(); // apply new brand colours/font immediately
+      toast.success(f(t, "theme_saved", "Theme saved."));
       onClose();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -665,6 +693,7 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
     try {
       await apiPost("/api/settings/theme/reset");
       refreshTheme(); // revert to defaults immediately
+      toast.success(f(t, "theme_reset", "Theme reset to defaults."));
       onClose();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -704,6 +733,44 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
             </Field>
           ))}
         </div>
+
+        {/* Started-rental bar gradient — a dedicated pair (not single swatches)
+            since the two colours are mixed together; a live preview strip shows
+            the resulting gradient as either colour changes. */}
+        <div className="pt-1">
+          <div className="text-xs font-semibold text-muted mb-2">
+            {f(t, "theme_bar_gradient_title", "Active Rental Bar Gradient")}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {BAR_GRADIENT_KEYS.map((c) => (
+              <Field key={c.key} label={f(t, c.label, c.fb)}>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    className="!w-10 !p-0.5 h-9"
+                    value={v[c.key] || "#ffffff"}
+                    onChange={(e) => set(c.key, e.target.value)}
+                  />
+                  <input
+                    className="flex-1 font-mono text-xs"
+                    value={v[c.key] || ""}
+                    onChange={(e) => set(c.key, e.target.value)}
+                  />
+                </div>
+              </Field>
+            ))}
+          </div>
+          <div
+            className="mt-2 h-9 rounded-[8px] border border-line"
+            style={{
+              background: `linear-gradient(135deg, ${v.bar_gradient_start || "#ffffff"} 0%, ${
+                v.bar_gradient_end || "#bae6fd"
+              } 100%)`,
+            }}
+            title={f(t, "theme_bar_gradient_preview", "Preview")}
+          />
+        </div>
+
         {err && <div className="text-sm text-danger">{err}</div>}
         <div className="flex items-center gap-2">
           <button className="btn btn-primary flex-1" onClick={save} disabled={busy}>
@@ -720,6 +787,7 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
 
 function BusinessTab() {
   const t = useT();
+  const toast = useToast();
   const { user } = useAuth();
   const isSuper = can(user, "edit_business_settings");
   const [b, setB] = useState<BusinessInfo | null>(null);
@@ -758,6 +826,7 @@ function BusinessTab() {
     try {
       await fn();
       setMsg({ ok: true, m: okMsg });
+      toast.success(okMsg);
     } catch (e: any) {
       setMsg({ ok: false, m: t(e?.key || "error") });
     }
@@ -902,6 +971,7 @@ const blankLicense = {
 
 function LicenseTab() {
   const t = useT();
+  const toast = useToast();
   const { lang } = useI18n();
   const { user } = useAuth();
   const canGenerate = can(user, "edit_business_settings");
@@ -963,6 +1033,7 @@ function LicenseTab() {
         year: genYear,
       });
       setGenKey(r.key);
+      toast.success(`${f(t, "generate_key", "License key generated")} · ${r.year}`);
     } catch (e: any) {
       setGenKey("");
       setRedeemMsg({ ok: false, m: t(e?.key || "error") });
@@ -978,10 +1049,9 @@ function LicenseTab() {
       );
       setRedeemKey("");
       if (canGenerate) refreshStatus();
-      setRedeemMsg({
-        ok: true,
-        m: `${f(t, "year", "Year")} ${r.year} ${f(t, "activated", "activated")}`,
-      });
+      const okMsg = `${f(t, "year", "Year")} ${r.year} ${f(t, "activated", "activated")}`;
+      setRedeemMsg({ ok: true, m: okMsg });
+      toast.success(okMsg);
     } catch (e: any) {
       setRedeemMsg({
         ok: false,
@@ -995,6 +1065,7 @@ function LicenseTab() {
     try {
       await fn();
       setMsg({ ok: true, m: okMsg });
+      toast.success(okMsg);
     } catch (e: any) {
       setMsg({ ok: false, m: t(e?.key || "error") });
     }
@@ -1220,6 +1291,7 @@ function LicenseTab() {
             submitLabel={f(t, "add_btn", "Add")}
             onSubmit={async (v) => {
               await apiPost("/api/licenses", v);
+              toast.success(f(t, "license_added", "License record added."));
               setAdding(false);
               load();
             }}
@@ -1240,6 +1312,7 @@ function LicenseTab() {
             submitLabel={f(t, "update_btn", "Save")}
             onSubmit={async (v) => {
               await apiPut(`/api/licenses/${editing.license_id}`, v);
+              toast.success(f(t, "license_updated", "License record updated."));
               setEditing(null);
               load();
             }}
@@ -1353,6 +1426,7 @@ function ResetButton({
   onDone: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -1365,6 +1439,7 @@ function ResetButton({
       await apiPost(path, { confirm });
       setConfirm("");
       setMsg(f(t, "done", "Done"));
+      toast.success(`${label} — ${f(t, "done", "Done")}`);
       onDone();
     } catch (e: any) {
       setMsg(t(e?.key || "error"));
@@ -1403,6 +1478,7 @@ function ClientEditForm({
   onDone: () => void;
 }) {
   const t = useT();
+  const toast = useToast();
   const [name, setName] = useState(client.full_name || "");
   const [phone, setPhone] = useState(client.phone || "");
   const [idp, setIdp] = useState(client.id_passport || "");
@@ -1422,6 +1498,7 @@ function ClientEditForm({
         phone,
         id_passport: idp,
       });
+      toast.success(f(t, "customer_updated", "Customer updated."));
       onDone();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -1451,6 +1528,7 @@ function ClientEditForm({
 
 function DataTab() {
   const t = useT();
+  const toast = useToast();
   const { lang } = useI18n();
   const { user } = useAuth();
   const canDelete = roleLevel(user) >= 2;
@@ -1474,9 +1552,10 @@ function DataTab() {
     if (!confirm(`${f(t, "delete_btn", "Delete")}: ${c.full_name}?`)) return;
     try {
       await apiDel(`/api/customers/${c.customer_id}`, { confirm: true });
+      toast.success(f(t, "customer_deleted", "Customer deleted."));
       load();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     }
   }
 
@@ -1817,9 +1896,173 @@ function ActivityTab() {
 }
 
 // ============================================================================
+// BACKUP / RESTORE
+// ============================================================================
+function BackupTab() {
+  const t = useT();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
+
+  async function downloadDump(url: string, fallbackName: string) {
+    setBusy(true);
+    setMsg({ ok: true, m: "" });
+    try {
+      const res = (await api(url, { raw: true })) as Response;
+      if (!res.ok) {
+        let key = "error";
+        try {
+          const d = await res.json();
+          if (typeof d?.detail === "string") key = d.detail;
+        } catch {
+          /* non-JSON error */
+        }
+        throw { key };
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") || "";
+      const name = cd.match(/filename="?([^"]+)"?/)?.[1] || fallbackName;
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(objUrl);
+      setMsg({ ok: true, m: f(t, "backup_downloaded", "Backup downloaded") });
+      toast.success(f(t, "backup_downloaded", "Backup downloaded"));
+    } catch (e: any) {
+      setMsg({ ok: false, m: t(e?.key || "error") });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore() {
+    if (!file) return;
+    if (
+      !confirm(
+        f(
+          t,
+          "restore_confirm",
+          "This will REPLACE all current data with the backup. This cannot be undone. Continue?"
+        )
+      )
+    )
+      return;
+    setBusy(true);
+    setMsg({ ok: true, m: "" });
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await api<{ ok: boolean; counts: Record<string, number> }>("/api/data/import", {
+        method: "POST",
+        body: fd,
+      });
+      setFile(null);
+      const total = Object.values(r.counts || {}).reduce((a, b) => a + b, 0);
+      const okMsg = `${f(t, "restore_done", "Restore complete")} · ${total}`;
+      setMsg({ ok: true, m: okMsg });
+      toast.success(okMsg);
+    } catch (e: any) {
+      setMsg({ ok: false, m: t(e?.key || "error") });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <SectionCard title={f(t, "backup_database", "Backup Database")} icon="cloud_download">
+        <div className="text-xs text-muted">
+          {f(
+            t,
+            "backup_help",
+            "Download a full JSON snapshot of the database (fleet, rentals, customers, finance, users and settings). Keep it somewhere safe."
+          )}
+        </div>
+        <div className="flex flex-col gap-2">
+          <button
+            className="btn btn-primary w-full"
+            onClick={() => downloadDump("/api/data/backup", "bcr-backup.json")}
+            disabled={busy}
+          >
+            <span className="msr text-[18px]">cloud_download</span>
+            {busy ? "…" : f(t, "download_backup", "Download Backup (JSON)")}
+          </button>
+          <button
+            className="btn w-full"
+            onClick={() => downloadDump("/api/data/backup.csv", "bcr-backup-csv.zip")}
+            disabled={busy}
+            title={f(t, "download_backup_csv_hint", "One CSV per table, bundled as a .zip — opens in Excel")}
+          >
+            <span className="msr text-[18px]">table_view</span>
+            {busy ? "…" : f(t, "download_backup_csv", "Download as CSV (.zip)")}
+          </button>
+          <button
+            className="btn w-full"
+            onClick={() => downloadDump("/api/data/backup-single.csv", "bcr-backup.csv")}
+            disabled={busy}
+            title={f(t, "download_backup_single_csv_hint", "Every table concatenated into one CSV file")}
+          >
+            <span className="msr text-[18px]">description</span>
+            {busy ? "…" : f(t, "download_backup_single_csv", "Download as single CSV file")}
+          </button>
+          <button
+            className="btn w-full"
+            onClick={() => downloadDump("/api/data/backup.sqlite", "bcr-backup.sqlite")}
+            disabled={busy}
+            title={f(t, "download_backup_sqlite_hint", "Portable single-file SQLite database")}
+          >
+            <span className="msr text-[18px]">database</span>
+            {busy ? "…" : f(t, "download_backup_sqlite", "Download as SQLite (.sqlite)")}
+          </button>
+        </div>
+      </SectionCard>
+
+      <SectionCard title={f(t, "restore_database", "Restore / Import")} icon="cloud_upload">
+        <div className="text-xs text-danger">
+          {f(
+            t,
+            "restore_help",
+            "Importing a backup REPLACES all current data. Make a backup first — this cannot be undone."
+          )}
+        </div>
+        <label className="btn !py-1.5 !px-3 text-xs cursor-pointer w-fit">
+          <span className="msr text-[16px]">description</span>
+          {file ? file.name : f(t, "choose_file", "Choose backup file…")}
+          <input
+            type="file"
+            accept="application/json,.json"
+            className="hidden !w-auto"
+            disabled={busy}
+            onChange={(e) => {
+              setFile(e.target.files?.[0] || null);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <button
+          className="btn btn-danger w-full"
+          onClick={restore}
+          disabled={busy || !file}
+        >
+          <span className="msr text-[18px]">cloud_upload</span>
+          {busy ? "…" : f(t, "restore_backup", "Restore Backup")}
+        </button>
+      </SectionCard>
+
+      <div className="lg:col-span-2">
+        <Notice ok={msg.ok} msg={msg.m} />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // PAGE — tab shell
 // ============================================================================
-type TabId = "profile" | "users" | "business" | "license" | "data" | "activity";
+type TabId = "profile" | "users" | "business" | "license" | "data" | "activity" | "backup";
 
 export default function SettingsPage() {
   const t = useT();
@@ -1833,6 +2076,7 @@ export default function SettingsPage() {
       { id: "business", label: f(t, "tab_business", "Business"), icon: "storefront", show: can(user, "manage_users") },
       { id: "license", label: f(t, "tab_license", "License"), icon: "workspace_premium", show: roleLevel(user) >= 2 },
       { id: "data", label: f(t, "tab_data", "Data"), icon: "database", show: can(user, "edit_business_settings") },
+      { id: "backup", label: f(t, "tab_backup", "Backup"), icon: "backup", show: can(user, "backup_database") },
       { id: "activity", label: f(t, "tab_activity", "Activity"), icon: "history", show: can(user, "manage_users") },
     ];
     return list.filter((x) => x.show);
@@ -1870,6 +2114,7 @@ export default function SettingsPage() {
       {tab === "business" && can(user, "manage_users") && <BusinessTab />}
       {tab === "license" && roleLevel(user) >= 2 && <LicenseTab />}
       {tab === "data" && can(user, "edit_business_settings") && <DataTab />}
+      {tab === "backup" && can(user, "backup_database") && <BackupTab />}
       {tab === "activity" && can(user, "manage_users") && <ActivityTab />}
     </div>
   );

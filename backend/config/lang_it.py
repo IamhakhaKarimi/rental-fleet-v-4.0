@@ -389,6 +389,11 @@ UI = {
     "qr_contact":            "Salva il contatto",
     "qr_location":           "Trovaci / riconsegna",
     "qr_summary":            "Riepilogo noleggio",
+    "qa_total":              "Totale noleggio",
+    "qa_iban":               "Banca / IBAN",
+    "qa_return":             "Indirizzo di reso",
+    "qa_balance":            "Saldo dovuto",
+    "qa_call":               "Chiamaci",
     "qr_scan_hint":          "Inquadra col telefono",
     # theme customization (super-admin) + night mode
     "select_theme":          "Scegli tema",

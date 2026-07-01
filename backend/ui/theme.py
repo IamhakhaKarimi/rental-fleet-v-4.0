@@ -62,6 +62,8 @@ THEME_DEFAULTS = {
     "alert": TOKENS["danger"],            # alert / overdue / destructive
     "disabled": TOKENS["archived"],       # disabled / archived
     "bg": TOKENS["bg"],                   # page background
+    "bar_gradient_start": "#FFFFFF",      # started-rental bar/card gradient — start colour
+    "bar_gradient_end": "#BAE6FD",        # started-rental bar/card gradient — end colour
 }
 # Curated picker list — all on Google Fonts with full TR/SQ glyph coverage and the
 # 400;500;600;700 weights this app uses (fonts lacking those weights are excluded so

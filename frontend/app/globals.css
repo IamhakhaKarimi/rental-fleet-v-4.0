@@ -35,6 +35,12 @@
   --cal-grid: color-mix(in oklab, var(--cal-rowsep) 38%, transparent);
   --cal-grid-strong: color-mix(in oklab, var(--cal-rowsep) 70%, transparent);
 
+  /* Started-rental bar/card gradient (Settings -> Select Theme -> Active Rental Bar
+     Gradient). ThemeProvider overrides these two with the super-admin's stored
+     colours; these are just the shipped defaults (white -> sky-blue). */
+  --bar-grad-start: #ffffff;
+  --bar-grad-end: #bae6fd;
+
   /* Neumorphism shadow pair, derived from the light background. */
   --neo-light: #ffffff;
   --neo-dark: #e4e2dc;
@@ -295,6 +301,13 @@ input:focus, select:focus, textarea:focus {
 }
 .bento-in { animation: bento-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* Toast confirmations — slide up + fade in from the bottom-right. */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.toast-in { animation: toast-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
@@ -403,6 +416,33 @@ input:focus, select:focus, textarea:focus {
   border-color: color-mix(in oklab, var(--archived) 55%, transparent);
   color: var(--muted);
 }
+/* Active (neutral "ok") rentals carry the admin-configured "Active Rental Bar
+   Gradient" (Settings -> Select Theme). This paints ALL active rentals — upcoming
+   AND already-underway — so the gradient selector visibly affects the timeline's
+   active bars. Due-soon (amber) and overdue (red) alerts keep their alert colour;
+   closed/returned bars recede to grey. Text stays dark (inherited from .cal-bar)
+   so it's legible in night mode too. */
+.cal-bar--ok {
+  background: linear-gradient(135deg, var(--bar-grad-start), var(--bar-grad-end));
+  border-color: color-mix(in oklab, var(--bar-grad-end) 55%, #000 8%);
+}
+/* A rental already underway (its start date has been reached) keeps the same
+   configured gradient but gains an accent left edge, so cars currently out on the
+   road still read differently from upcoming reservations. */
+.cal-bar--started {
+  background: linear-gradient(135deg, var(--bar-grad-start), var(--bar-grad-end));
+  border-color: color-mix(in oklab, var(--bar-grad-end) 55%, #000 8%);
+  box-shadow: inset 3px 0 0 var(--accent), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+/* Reservation-card header for a rental already underway — the same admin-configured
+   gradient as the "started" timeline bars. Text is pinned dark so it survives night
+   mode (where --text/ink is light and would vanish on this wash). */
+.client-bar-started {
+  background: linear-gradient(135deg, var(--bar-grad-start), var(--bar-grad-end));
+  border: 1px solid color-mix(in oklab, var(--bar-grad-end) 45%, #000 8%);
+}
+.client-bar-started .cb-name { color: #0f172a; }
+.client-bar-started .cb-sub  { color: #475569; }
 
 /* Notification bell tones. Due-soon shows a soft "faded yellow" highlight; overdue
    stays red. Scoped to the bell (its own tokens) so the timeline's due-soon bars

@@ -397,6 +397,11 @@ TRANSLATIONS = {
         "qr_contact":            "Kişimizi kaydet",
         "qr_location":           "Bizi bul / iade et",
         "qr_summary":            "Kiralama özeti",
+        "qa_total":              "Kira toplamı",
+        "qa_iban":               "Banka / IBAN",
+        "qa_return":             "İade adresi",
+        "qa_balance":            "Kalan tutar",
+        "qa_call":               "Bizi arayın",
         "qr_scan_hint":          "Telefonunuzla tarayın",
         # theme customization (super-admin) + night mode
         "select_theme":          "Tema Seç",
@@ -895,6 +900,11 @@ TRANSLATIONS = {
         "qr_contact":            "Save our contact",
         "qr_location":           "Find / return here",
         "qr_summary":            "Rental summary",
+        "qa_total":              "Rental total",
+        "qa_iban":               "Bank / IBAN",
+        "qa_return":             "Return address",
+        "qa_balance":            "Balance due",
+        "qa_call":               "Call us",
         "qr_scan_hint":          "Scan with your phone",
         # theme customization (super-admin) + night mode
         "select_theme":          "Select Theme",

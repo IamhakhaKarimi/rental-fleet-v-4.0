@@ -16,6 +16,11 @@ lives in the repositories — this router never writes SQL.
 from __future__ import annotations
 
 import base64
+import csv
+import io
+import json
+import zipfile
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
@@ -86,6 +91,8 @@ class ThemeIn(BaseModel):
     alert: str | None = None
     disabled: str | None = None
     bg: str | None = None
+    bar_gradient_start: str | None = None
+    bar_gradient_end: str | None = None
 
 
 class LicenseYearIn(BaseModel):
@@ -418,4 +425,148 @@ def reset_fleet(body: ConfirmIn,
     _require_reset_confirm(body.confirm)
     counts = admin_ops.reset_fleet()
     audit_service.record(user, "reset_fleet", "data", "fleet")
+    return {"ok": True, "counts": counts}
+
+
+# ── Backup / restore ─────────────────────────────────────────────────────────
+# Admin + super-admin (``backup_database``, level 2). Export streams a JSON dump of
+# every business table; import replaces the current data with a previously exported
+# backup, in one transaction. Both audit.
+@router.get("/data/backup")
+def backup_database(user: dict = Depends(require("backup_database"))) -> Response:
+    payload = admin_ops.export_all()
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    audit_service.record(user, "backup_database", "data", "backup")
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="bcr-backup-{stamp}.json"'},
+    )
+
+
+@router.get("/data/backup.csv")
+def backup_database_csv(user: dict = Depends(require("backup_database"))) -> Response:
+    """Same snapshot as ``/data/backup`` but as a ZIP of one CSV per table — handy for
+    opening in Excel / Sheets. Secret and binary columns (password hashes, base64
+    photo blobs) are dropped: this export is for *reading*, not restoring (import
+    still expects the JSON dump). Each CSV is UTF-8 with a BOM so € renders in Excel."""
+    tables = admin_ops.export_all().get("tables", {})
+    skip_cols = {"password_hash", "photo"}
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for tbl, rows in tables.items():
+            cols = [c for c in (rows[0].keys() if rows else []) if c not in skip_cols]
+            sbuf = io.StringIO()
+            writer = csv.writer(sbuf)
+            writer.writerow(cols)
+            for row in rows:
+                writer.writerow([row.get(c, "") for c in cols])
+            zf.writestr(f"{tbl}.csv", "﻿" + sbuf.getvalue())
+    audit_service.record(user, "backup_database_csv", "data", "backup")
+    return Response(
+        content=zbuf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="bcr-backup-{stamp}.zip"'},
+    )
+
+
+@router.get("/data/backup-single.csv")
+def backup_database_single_csv(user: dict = Depends(require("backup_database"))) -> Response:
+    """The whole database as ONE CSV file: every table's rows concatenated, each
+    section preceded by a ``# TABLE: <name>`` marker and its column header, with a
+    blank line between tables. Secret/binary columns (password hashes, base64 photo
+    blobs) are dropped — this export is for reading (Excel/Sheets), not restoring
+    (import still expects the JSON dump). UTF-8 with a BOM so € renders in Excel."""
+    tables = admin_ops.export_all().get("tables", {})
+    skip_cols = {"password_hash", "photo"}
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    sbuf = io.StringIO()
+    writer = csv.writer(sbuf)
+    for tbl, rows in tables.items():
+        cols = [c for c in (rows[0].keys() if rows else []) if c not in skip_cols]
+        writer.writerow([f"# TABLE: {tbl}"])
+        if cols:
+            writer.writerow(cols)
+            for row in rows:
+                writer.writerow([row.get(c, "") for c in cols])
+        writer.writerow([])  # blank separator line between tables
+    audit_service.record(user, "backup_database_single_csv", "data", "backup")
+    return Response(
+        content=("﻿" + sbuf.getvalue()).encode("utf-8"),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="bcr-backup-{stamp}.csv"'},
+    )
+
+
+@router.get("/data/backup.sqlite")
+def backup_database_sqlite(user: dict = Depends(require("backup_database"))) -> Response:
+    """The whole database as a portable single-file SQLite database. Built from the
+    same snapshot as the JSON/CSV backups (so it works identically on a local SQLite
+    dev DB and on a managed remote DB such as Turso/Postgres): every backed-up table
+    is recreated with its columns and all rows inserted. Opens in any SQLite tool
+    (DB Browser for SQLite, `sqlite3`, etc.)."""
+    import os
+    import sqlite3
+    import tempfile
+
+    tables = admin_ops.export_all().get("tables", {})
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    fd, path = tempfile.mkstemp(suffix=".sqlite")
+    os.close(fd)
+    try:
+        con = sqlite3.connect(path)
+        try:
+            for tbl, rows in tables.items():
+                # Union of column names across rows keeps every field even if the
+                # first row is missing a nullable one. Skip a table with no rows.
+                cols: list[str] = []
+                seen: set[str] = set()
+                for row in rows:
+                    for c in row.keys():
+                        if c not in seen:
+                            seen.add(c)
+                            cols.append(c)
+                if not cols:
+                    continue
+                col_ddl = ", ".join(f'"{c}"' for c in cols)
+                con.execute(f'CREATE TABLE "{tbl}" ({col_ddl})')
+                placeholders = ", ".join("?" for _ in cols)
+                con.executemany(
+                    f'INSERT INTO "{tbl}" ({col_ddl}) VALUES ({placeholders})',
+                    [[row.get(c) for c in cols] for row in rows],
+                )
+            con.commit()
+        finally:
+            con.close()
+        with open(path, "rb") as fh:
+            data = fh.read()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    audit_service.record(user, "backup_database_sqlite", "data", "backup")
+    return Response(
+        content=data,
+        media_type="application/vnd.sqlite3",
+        headers={"Content-Disposition": f'attachment; filename="bcr-backup-{stamp}.sqlite"'},
+    )
+
+
+@router.post("/data/import")
+async def import_database(file: UploadFile = File(...),
+                          user: dict = Depends(require("backup_database"))) -> dict:
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, detail="fields_required")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, detail="invalid_backup")
+    if not isinstance(data, dict) or not isinstance(data.get("tables"), dict):
+        raise HTTPException(400, detail="invalid_backup")
+    counts = admin_ops.import_all(data)
+    audit_service.record(user, "import_database", "data", "restore")
     return {"ok": True, "counts": counts}

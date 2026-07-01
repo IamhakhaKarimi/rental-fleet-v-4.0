@@ -389,6 +389,11 @@ UI = {
     "qr_contact":            "Guardar contacto",
     "qr_location":           "Encuéntranos / devolución",
     "qr_summary":            "Resumen del alquiler",
+    "qa_total":              "Total alquiler",
+    "qa_iban":               "Banco / IBAN",
+    "qa_return":             "Dirección de devolución",
+    "qa_balance":            "Saldo pendiente",
+    "qa_call":               "Llámanos",
     "qr_scan_hint":          "Escanea con tu teléfono",
     # theme customization (super-admin) + night mode
     "select_theme":          "Elegir tema",

@@ -29,14 +29,25 @@ _LINE_LABEL = {
     "damage": "damage_charge",
 }
 
+# Sentinels wrapping the invoice sheets in the HTML so a batch print can reuse this
+# exact template (shared <style>/<head> + print toolbar) and splice several invoices
+# into one document without duplicating the CSS.
+_SHEETS_START = "<!--BCR_SHEETS_START-->"
+_SHEETS_END = "<!--BCR_SHEETS_END-->"
+
 
 def _esc(value) -> str:
     return _html.escape(str(value if value is not None else ""))
 
 
 def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
-                       lang: str = "tr", logo: str = "", stamp: str = "") -> str:
-    """Return a complete, standalone, compact HTML invoice in `lang`."""
+                       lang: str = "tr", logo: str = "", stamp: str = "",
+                       copy_kinds: tuple = ("customer", "office")) -> str:
+    """Return a complete, standalone, compact HTML invoice in `lang`.
+
+    `copy_kinds` selects which duplicate sheets to render (default: customer +
+    office, each on its own A4 page). A batch print passes ("office",) for a single
+    office copy per rental."""
     if lang not in LANGUAGES:
         lang = "tr"
     T = lambda k: t_lang(k, lang)
@@ -118,27 +129,33 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
     # Quick-links: ONE consolidated contact/links vCard QR (+ a separate pay QR when a
     # super-admin enabled it). Scanning the vCard exposes call/message/email/map links
     # as the phone's own buttons. On-screen we also show clickable WhatsApp/map links.
+    # Each QR carries its encoded actions (call / WhatsApp / map / pay-into IBAN) as
+    # a stack of tappable, labelled buttons directly beneath it — so a digital reader
+    # can act on the invoice without scanning, guided by the button text.
     qrs = invoice_links.build_invoice_qrs(deal, business_name, T, balance_due, inv_no)
-    btns = invoice_links.build_link_buttons(business_name, inv_no)
     links_html = ""
-    if qrs or btns:
-        cards = "".join(
-            f'<div class="ql-card">'
-            f'<img class="ql-qr" src="{invoice_links.qr_data_uri(q["payload"], scale=5)}" alt=""/>'
-            f'<div class="ql-label">{_esc(q["label"])}</div>'
-            f'<div class="ql-sub">{_esc(q["caption"])}</div></div>'
-            for q in qrs
-        )
-        btn_html = "".join(
-            f'<a class="ql-btn" href="{_esc(href)}" target="_blank" rel="noopener">'
-            f'{_esc(T(lk))}</a>'
-            for lk, href in btns
-        )
-        cards_block = f'<div class="ql-cards">{cards}</div>' if cards else ""
-        btns_block = f'<div class="ql-btns">{btn_html}</div>' if btn_html else ""
+    if qrs:
+        def _qr_btn(a: dict) -> str:
+            inner = (f'<span class="qlb-label">{_esc(a["label"])}</span>'
+                     f'<span class="qlb-val">{_esc(a["value"])}</span>')
+            if a.get("href"):
+                return (f'<a class="ql-btn ql-btn-link" href="{_esc(a["href"])}" '
+                        f'target="_blank" rel="noopener">{inner}</a>')
+            return f'<span class="ql-btn ql-btn-info">{inner}</span>'
+
+        def _card(q: dict) -> str:
+            btns = "".join(_qr_btn(a) for a in (q.get("actions") or []))
+            btns_block = f'<div class="ql-btns">{btns}</div>' if btns else ""
+            return (f'<div class="ql-card">'
+                    f'<img class="ql-qr" src="{invoice_links.qr_data_uri(q["payload"], scale=5)}" alt=""/>'
+                    f'<div class="ql-label">{_esc(q["label"])}</div>'
+                    f'<div class="ql-sub">{_esc(q["caption"])}</div>{btns_block}</div>')
+
+        cards = "".join(_card(q) for q in qrs)
         links_html = (
             f'<div class="quicklinks"><div class="ql-head">'
-            f'{_esc(T("invoice_quick_links"))}</div>{cards_block}{btns_block}</div>'
+            f'{_esc(T("invoice_quick_links"))}</div>'
+            f'<div class="ql-cards">{cards}</div></div>'
         )
 
     # The document carries TWO identical copies on their own A4 pages — one for the
@@ -204,7 +221,8 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
     def _sheet(label: str) -> str:
         return f'<div class="sheet"><div class="copy-label">{label}</div>{sheet_inner}</div>'
 
-    copies = _sheet(_esc(T('invoice_copy_customer'))) + _sheet(_esc(T('invoice_copy_office')))
+    _copy_labels = {"customer": T('invoice_copy_customer'), "office": T('invoice_copy_office')}
+    copies = "".join(_sheet(_esc(_copy_labels[c])) for c in copy_kinds if c in _copy_labels)
 
     return f"""<!DOCTYPE html><html lang="{lang}"><head><meta charset="utf-8"/>
 <title>{_esc(T('invoice_heading'))} {_esc(inv_no)}</title>
@@ -253,13 +271,33 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
               color:#736B60; margin-bottom:8px; }}
   .ql-cards {{ display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }}
   .ql-card {{ display:flex; flex-direction:column; align-items:center; gap:3px;
-              border:1px solid #211C17; border-radius:10px; padding:8px 12px; }}
+              border:1px solid #211C17; border-radius:10px; padding:8px 12px;
+              min-width:172px; }}
   .ql-qr {{ width:92px; height:92px; image-rendering:pixelated; }}
   .ql-label {{ font-size:11px; font-weight:700; }}
   .ql-sub {{ font-size:9px; color:#736B60; }}
-  .ql-btns {{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:8px; }}
-  .ql-btn {{ font-size:10px; font-weight:600; text-decoration:none; color:#211C17;
-             border:1px solid #211C17; border-radius:999px; padding:4px 12px; }}
+  /* Per-QR tappable action buttons (call / WhatsApp / map / IBAN): each guides the
+     reader to one task straight from the invoice, no scan required. */
+  .ql-btns {{ display:flex; flex-direction:column; gap:4px; width:100%; margin-top:6px; }}
+  .ql-btn {{ display:flex; flex-direction:column; align-items:flex-start; gap:0;
+             padding:4px 8px; border:1px solid #211C17; border-radius:7px;
+             text-decoration:none; color:#211C17; break-inside:avoid; }}
+  .ql-btn-info {{ background:#F7F5F1; }}
+  .qlb-label {{ font-size:7.5px; font-weight:700; letter-spacing:.05em;
+                text-transform:uppercase; color:#736B60; }}
+  .qlb-val {{ font-size:10px; font-weight:600; word-break:break-word; line-height:1.2; }}
+  /* Quick-action pills — up to six info/link buttons below the QR cards (rental
+     total, bank/IBAN, return address, balance, call, WhatsApp). Link pills are
+     bordered; info pills are tinted. Two tidy rows of three inside the 640px sheet. */
+  .qa-row {{ display:flex; gap:6px; justify-content:center; flex-wrap:wrap; margin-top:10px; }}
+  .qa-pill {{ display:flex; flex-direction:column; align-items:flex-start; gap:1px;
+              min-width:150px; flex:1 1 150px; max-width:200px; border:1px solid #211C17;
+              border-radius:8px; padding:5px 10px; text-decoration:none; color:#211C17;
+              break-inside:avoid; }}
+  .qa-info {{ background:#F7F5F1; }}
+  .qa-label {{ font-size:8px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+               color:#736B60; }}
+  .qa-val {{ font-size:11px; font-weight:600; word-break:break-word; line-height:1.25; }}
   /* Terms & conditions — small two-column list so it still fits one A4 page */
   .terms {{ margin-top:14px; padding-top:10px; border-top:1px dashed #CBD5E1; }}
   .terms h3 {{ font-family:'Plus Jakarta Sans',system-ui,sans-serif; font-size:11px; margin:0 0 6px;
@@ -295,8 +333,33 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
   }}
 </style></head><body>
   <div class="toolbar"><button onclick="window.print()">{_esc(T('invoice_print'))}</button></div>
-  {copies}
+  {_SHEETS_START}{copies}{_SHEETS_END}
 </body></html>"""
+
+
+def build_invoices_batch_html(items: list, business_name: str,
+                              lang: str = "tr", logo: str = "", stamp: str = "") -> str:
+    """Combine several rentals into ONE printable HTML document — a single OFFICE
+    copy per rental, each on its own A4 page (the .sheet page-break handles it).
+
+    `items` is a list of (deal, charges) pairs. Each invoice uses its own stored
+    invoice_lang (falling back to `lang`). Reuses build_invoice_html so every sheet
+    is byte-identical to a single print; the shared <style>/<head> + print toolbar
+    are emitted once by splicing on the sheet sentinels."""
+    head = tail = None
+    sheets: list[str] = []
+    for deal, charges in items:
+        dl = deal.get("invoice_lang") or lang
+        html = build_invoice_html(deal, charges, business_name, dl, logo, stamp,
+                                  copy_kinds=("office",))
+        before, _, rest = html.partition(_SHEETS_START)
+        mid, _, after = rest.partition(_SHEETS_END)
+        sheets.append(mid)
+        if head is None:
+            head, tail = before, after
+    if head is None:
+        return '<!DOCTYPE html><html><body></body></html>'
+    return head + "".join(sheets) + tail
 
 
 def render_invoice(deal_id: str, key_prefix: str = "inv", lang: str | None = None):

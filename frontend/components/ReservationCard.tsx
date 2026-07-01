@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { api, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { formatEur } from "@/lib/money";
 import { Modal } from "./Modal";
 
@@ -25,6 +26,15 @@ export interface ActiveRental {
 
 const fmtInvoiceNo = (id: string) =>
   id.replace(/^(RENT-)(\d{4})(\d{2})(-.+)$/, "$1$2-$3$4");
+
+// Whole-day span between two local "YYYY-MM-DD" strings (no UTC parsing, so it
+// can't drift across timezones). Used to show the live day count as the return
+// date is edited.
+const daysBetweenISO = (a: string, b: string) => {
+  const [y1, m1, d1] = a.split("-").map(Number);
+  const [y2, m2, d2] = b.split("-").map(Number);
+  return Math.round((new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime()) / 86400000);
+};
 
 function Stepper({ value, set, step = 5 }: { value: number; set: (n: number) => void; step?: number }) {
   return (
@@ -75,6 +85,7 @@ function Section({
 
 export function ReservationCard({ rental, onChange }: { rental: ActiveRental; onChange: () => void }) {
   const { t, lang } = useI18n();
+  const toast = useToast();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
   const r = rental;
 
@@ -87,7 +98,10 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
   // Edit Reservation
   const [rate, setRate] = useState(Math.round((r.daily_rate || 0) / 100));
   const [vehicleId, setVehicleId] = useState(r.vehicle_id);
+  const [startDate, setStartDate] = useState(r.start_dt.slice(0, 10));
+  const [returnDate, setReturnDate] = useState(r.end_dt.slice(0, 10));
   const [cars, setCars] = useState<{ vehicle_id: string; make_model: string; license_plate?: string }[]>([]);
+  const editDays = Math.max(1, daysBetweenISO(startDate, returnDate));
   // Manage / Return
   const [penalty, setPenalty] = useState(0);
   const [damage, setDamage] = useState(0);
@@ -118,7 +132,7 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       setInvLang(meta.default_lang || "tr");
       setLangOpen(true);
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     }
   }
 
@@ -134,22 +148,38 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       }
       setLangOpen(false);
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     }
   }
 
   async function applyEdit() {
     setBusy(true);
     try {
+      const startChanged = startDate && startDate !== r.start_dt.slice(0, 10);
+      const endChanged = returnDate && returnDate !== r.end_dt.slice(0, 10);
+      if (startChanged || endChanged) {
+        await apiPut(`/api/rentals/${r.deal_id}/dates`, {
+          start_date: startDate,
+          return_date: returnDate,
+        });
+      }
       if (rate !== Math.round((r.daily_rate || 0) / 100)) {
         await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
       }
       if (vehicleId && vehicleId !== r.vehicle_id) {
         await apiPut(`/api/rentals/${r.deal_id}/vehicle`, { vehicle_id: vehicleId });
       }
+      toast.success(tf("reservation_updated", "Reservation updated."));
       onChange();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      const k = e?.key || "error";
+      const fb =
+        k === "date_conflict"
+          ? "That return date overlaps another booking for this car."
+          : k === "invalid_dates"
+          ? "The return date must be after the start date."
+          : "Could not save the changes.";
+      toast.error(tf(k, fb));
     } finally {
       setBusy(false);
     }
@@ -164,9 +194,10 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
         return_notes: notes,
         contract_signed: signed,
       });
+      toast.success(tf("return_processed", "Return processed — rental closed."));
       onChange();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setBusy(false);
     }
@@ -177,9 +208,10 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
     setBusy(true);
     try {
       await apiPost(`/api/rentals/${r.deal_id}/cancel`);
+      toast.success(tf("reservation_cancelled", "Reservation cancelled."));
       onChange();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setBusy(false);
     }
@@ -187,12 +219,17 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
 
   const lbl = "text-xs text-muted block mb-1";
 
+  // A rental that is already underway (its start has been reached) gets a faded
+  // white -> sky-blue header wash so active pickups read differently from upcoming
+  // reservations. Invalid/blank dates fall back to "not started".
+  const started = new Date(r.start_dt.replace(" ", "T")).getTime() <= Date.now();
+
   return (
     <div className="card p-4 space-y-3">
       {/* Header */}
-      <div className="rounded-[10px] bg-[rgba(17,24,39,0.05)] px-4 py-3">
-        <div className="font-bold text-ink">{r.client_name}</div>
-        <div className="text-xs text-muted">{fmtInvoiceNo(r.deal_id)}</div>
+      <div className={`rounded-[10px] px-4 py-3 ${started ? "client-bar-started" : "bg-[rgba(17,24,39,0.05)]"}`}>
+        <div className={`font-bold ${started ? "cb-name" : "text-ink"}`}>{r.client_name}</div>
+        <div className={`text-xs ${started ? "cb-sub" : "text-muted"}`}>{fmtInvoiceNo(r.deal_id)}</div>
       </div>
 
       {/* Info grid */}
@@ -248,6 +285,28 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       {/* Edit Reservation */}
       <Section icon="edit" title={t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}>
         <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={lbl}>{tf("start_date", "Start Date")}</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={lbl}>{tf("return_date", "Return Date")}</label>
+              <input
+                type="date"
+                min={startDate}
+                value={returnDate}
+                onChange={(e) => setReturnDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="text-xs text-muted -mt-1">
+            {editDays} {t("days")}
+          </div>
           <div>
             <label className={lbl}>{t("negotiated_rate")} (€)</label>
             <Stepper value={rate} set={setRate} />

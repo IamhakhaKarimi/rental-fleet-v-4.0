@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from api.deps import require
 from config.settings import LANGUAGES
 from data.repositories import app_settings as app_cfg
 from data.repositories import rentals as rrepo
-from ui.invoice import build_invoice_html
+from ui.invoice import build_invoice_html, build_invoices_batch_html
 from ui.pdf import build_invoice_pdf
 
 router = APIRouter(prefix="/api/rentals", tags=["invoices"])
@@ -54,3 +55,28 @@ def invoice_pdf(deal_id: str, lang: str = "",
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="invoice_{deal_id}_{lang}.pdf"'},
     )
+
+
+class BatchInvoicesIn(BaseModel):
+    deal_ids: list[str]
+    lang: str = ""
+
+
+@router.post("/invoices-batch.html", response_class=HTMLResponse)
+def invoices_batch_html(body: BatchInvoicesIn,
+                        user: dict = Depends(require("view_management"))) -> HTMLResponse:
+    """One printable HTML doc with a single OFFICE copy per selected rental — the
+    Customers-page "print active invoices" run. Skips any missing deal id and 404s
+    only if nothing valid was selected."""
+    items = []
+    for did in body.deal_ids:
+        deal = rrepo.get_rental_full(did)
+        if not deal:
+            continue
+        items.append((deal, rrepo.list_charges_for_deal(did)))
+    if not items:
+        raise HTTPException(404, detail="not_found")
+    lang = body.lang if body.lang in LANGUAGES else "tr"
+    html = build_invoices_batch_html(items, app_cfg.get_business_name(), lang,
+                                     app_cfg.get_logo(), app_cfg.get_stamp())
+    return HTMLResponse(content=html)

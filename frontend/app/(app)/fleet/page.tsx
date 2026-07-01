@@ -3,10 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, apiDel, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
+import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
 import type { Vehicle } from "@/lib/types";
 
 type V = Vehicle & { locked?: boolean };
@@ -122,6 +124,8 @@ type Photo = { photo_id: number; photo: string; position: number };
 
 function PhotoManager({ vehicleId }: { vehicleId: string }) {
   const t = useT();
+  const toast = useToast();
+  const tf = (k: string, fb: string) => (t(k) === k ? fb : t(k));
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -148,6 +152,7 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
       for (const file of Array.from(files)) fd.append("files", file);
       await api(`/api/vehicles/${vehicleId}/photos`, { method: "POST", body: fd });
       if (input) input.value = "";
+      toast.success(tf("photos_added", "Photos added."));
       refetch();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -159,6 +164,7 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
   async function remove(photoId: number) {
     try {
       await apiDel(`/api/vehicles/photos/${photoId}`);
+      toast.success(tf("photo_deleted", "Photo deleted."));
       refetch();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -221,11 +227,24 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
 
 export default function FleetPage() {
   const t = useT();
+  const toast = useToast();
+  const tf = (k: string, fb: string) => (t(k) === k ? fb : t(k));
   const { user } = useAuth();
   const [vehicles, setVehicles] = useState<V[]>([]);
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<V | null>(null);
+  const [view, setView] = useState<ViewMode>("cards");
+
+  // Remember the last chosen view across visits.
+  useEffect(() => {
+    const v = localStorage.getItem("fleet_view");
+    if (v === "cards" || v === "table") setView(v);
+  }, []);
+  const changeView = (v: ViewMode) => {
+    setView(v);
+    localStorage.setItem("fleet_view", v);
+  };
 
   const load = useCallback(() => {
     apiGet<V[]>(`/api/vehicles?q=${encodeURIComponent(q)}`).then(setVehicles).catch(() => {});
@@ -237,22 +256,101 @@ export default function FleetPage() {
   async function quickStatus(v: V, status: string) {
     try {
       await apiPost(`/api/vehicles/${v.vehicle_id}/status`, { status });
+      toast.success(`${v.make_model} · ${tf("status_updated", "status updated")} → ${status}`);
       load();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     }
   }
   async function archive(v: V) {
     if (!confirm(`${t("delete_btn")}: ${v.vehicle_id} · ${v.make_model}?`)) return;
-    await apiPost(`/api/vehicles/${v.vehicle_id}/archive`).then(load);
+    try {
+      await apiPost(`/api/vehicles/${v.vehicle_id}/archive`);
+      toast.success(`${v.make_model} — ${tf("vehicle_archived", "vehicle archived")}`);
+      load();
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    }
   }
   async function hardDelete(v: V) {
     if (!confirm(`${t("delete_btn")} (permanent): ${v.vehicle_id}?`)) return;
-    await apiDel(`/api/vehicles/${v.vehicle_id}`).then(load);
+    try {
+      await apiDel(`/api/vehicles/${v.vehicle_id}`);
+      toast.success(`${v.vehicle_id} — ${tf("vehicle_deleted", "vehicle deleted")}`);
+      load();
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    }
   }
 
   const canEdit = can(user, "service_vehicle");
   const canFleet = can(user, "edit_fleet");
+
+  // Shared CRUD/status action buttons for a vehicle — used by both the card grid
+  // and the table row so the two views stay in lockstep.
+  const renderActions = (v: V) =>
+    (canEdit || canFleet) && (
+      <div className="flex items-center gap-2 flex-wrap">
+        {canEdit && (
+          <button
+            className="btn !py-1.5 !px-3 text-xs"
+            title={t("edit_vehicle") === "edit_vehicle" ? "Edit vehicle" : t("edit_vehicle")}
+            onClick={() => setEditing(v)}
+          >
+            <span className="msr text-[16px]">edit</span>
+            {t("edit") === "edit" ? "Edit" : t("edit")}
+          </button>
+        )}
+        {v.status !== "Maintenance" && (
+          <button
+            className="btn !py-1.5 !px-3 text-xs"
+            title={t("set_maintenance") === "set_maintenance" ? "Set status to Maintenance" : t("set_maintenance")}
+            disabled={v.locked}
+            onClick={() => quickStatus(v, "Maintenance")}
+          >
+            <span className="msr text-[16px]">build</span>Maintenance
+          </button>
+        )}
+        {canFleet && v.status !== "In Garage" && (
+          <button
+            className="btn !py-1.5 !px-3 text-xs"
+            title={t("set_garage") === "set_garage" ? "Move to garage" : t("set_garage")}
+            disabled={v.locked}
+            onClick={() => quickStatus(v, "In Garage")}
+          >
+            <span className="msr text-[16px]">garage</span>Garage
+          </button>
+        )}
+        {(v.status === "Maintenance" || v.status === "In Garage") && (
+          <button
+            className="btn !py-1.5 !px-3 text-xs"
+            title={t("set_available") === "set_available" ? "Set status to Available" : t("set_available")}
+            disabled={v.locked}
+            onClick={() => quickStatus(v, "Available")}
+          >
+            <span className="msr text-[16px]">check_circle</span>Available
+          </button>
+        )}
+        {can(user, "soft_delete_vehicle") && (
+          <button
+            className="btn btn-danger !py-1.5 !px-3 text-xs"
+            title={t("archive_hint") === "archive_hint" ? "Archive (soft delete — can be restored)" : t("archive_hint")}
+            onClick={() => archive(v)}
+          >
+            <span className="msr text-[16px]">archive</span>
+          </button>
+        )}
+        {can(user, "hard_delete_vehicle") && (
+          <button
+            className="btn btn-danger !py-1.5 !px-3 text-xs"
+            title={t("delete_perm_hint") === "delete_perm_hint" ? "Delete permanently" : t("delete_perm_hint")}
+            onClick={() => hardDelete(v)}
+          >
+            <span className="msr text-[16px]">delete</span>
+          </button>
+        )}
+      </div>
+    );
 
   return (
     <div className="space-y-5">
@@ -261,131 +359,118 @@ export default function FleetPage() {
           <span className="msr text-[22px]">directions_car</span>
           <h1 className="text-xl font-bold">{t("nav_fleet")}</h1>
         </div>
-        {canFleet && (
-          <button className="btn btn-primary" onClick={() => setAdding(true)}>
-            <span className="msr text-[18px]">add</span>
-            {t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          <ViewToggle
+            value={view}
+            onChange={changeView}
+            cardsTitle={tf("view_cards", "Card view")}
+            tableTitle={tf("view_table", "Table view")}
+          />
+          {canFleet && (
+            <button className="btn btn-primary" onClick={() => setAdding(true)}>
+              <span className="msr text-[18px]">add</span>
+              {t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")}
+            </button>
+          )}
+        </div>
       </div>
       <input placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm" />
       <p className="text-xs text-muted">
         {vehicles.length} {t("col_count")}
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {vehicles.map((v) => (
-          <div key={v.vehicle_id} className="card p-4 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="font-semibold text-ink truncate">{v.make_model}</div>
-                <div className="text-xs text-muted">
-                  {v.year || "—"} · {v.vehicle_id}
+      {view === "cards" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {vehicles.map((v) => (
+            <div key={v.vehicle_id} className="card p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-ink truncate">{v.make_model}</div>
+                  <div className="text-xs text-muted">
+                    {v.year || "—"} · {v.vehicle_id}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-display font-bold text-accent">{formatEur(v.base_daily_rate)}</div>
+                  <div className="text-[0.6rem] uppercase text-muted tracking-wide">/ day</div>
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <div className="font-display font-bold text-accent">{formatEur(v.base_daily_rate)}</div>
-                <div className="text-[0.6rem] uppercase text-muted tracking-wide">/ day</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <StatusBadge status={v.status} />
-              {v.locked && (
-                <span className="badge badge-warn">
-                  <span className="msr text-[13px]">lock</span>
-                  {t("status_locked_rented") === "status_locked_rented" ? "Rented" : ""}
+              <div className="flex items-center gap-2 flex-wrap">
+                <StatusBadge status={v.status} />
+                {v.locked && (
+                  <span className="badge badge-warn">
+                    <span className="msr text-[13px]">lock</span>
+                    {t("status_locked_rented") === "status_locked_rented" ? "Rented" : ""}
+                  </span>
+                )}
+                <span className="text-xs text-muted ml-auto flex items-center gap-1">
+                  <span className="msr text-[14px]">pin_drop</span>
+                  {v.license_plate || "—"}
                 </span>
-              )}
-              <span className="text-xs text-muted ml-auto flex items-center gap-1">
-                <span className="msr text-[14px]">pin_drop</span>
-                {v.license_plate || "—"}
-              </span>
-            </div>
-
-            {(canEdit || canFleet) && (
-              <div className="flex items-center gap-2 flex-wrap pt-1">
-                {canEdit && (
-                  <button
-                    className="btn !py-1.5 !px-3 text-xs"
-                    title={t("edit_vehicle") === "edit_vehicle" ? "Edit vehicle" : t("edit_vehicle")}
-                    onClick={() => setEditing(v)}
-                  >
-                    <span className="msr text-[16px]">edit</span>
-                    {t("edit") === "edit" ? "Edit" : t("edit")}
-                  </button>
-                )}
-                {v.status !== "Maintenance" && (
-                  <button
-                    className="btn !py-1.5 !px-3 text-xs"
-                    title={
-                      t("set_maintenance") === "set_maintenance"
-                        ? "Set status to Maintenance"
-                        : t("set_maintenance")
-                    }
-                    disabled={v.locked}
-                    onClick={() => quickStatus(v, "Maintenance")}
-                  >
-                    <span className="msr text-[16px]">build</span>Maintenance
-                  </button>
-                )}
-                {canFleet && v.status !== "In Garage" && (
-                  <button
-                    className="btn !py-1.5 !px-3 text-xs"
-                    title={
-                      t("set_garage") === "set_garage" ? "Move to garage" : t("set_garage")
-                    }
-                    disabled={v.locked}
-                    onClick={() => quickStatus(v, "In Garage")}
-                  >
-                    <span className="msr text-[16px]">garage</span>Garage
-                  </button>
-                )}
-                {(v.status === "Maintenance" || v.status === "In Garage") && (
-                  <button
-                    className="btn !py-1.5 !px-3 text-xs"
-                    title={
-                      t("set_available") === "set_available"
-                        ? "Set status to Available"
-                        : t("set_available")
-                    }
-                    disabled={v.locked}
-                    onClick={() => quickStatus(v, "Available")}
-                  >
-                    <span className="msr text-[16px]">check_circle</span>Available
-                  </button>
-                )}
-                {can(user, "soft_delete_vehicle") && (
-                  <button
-                    className="btn btn-danger !py-1.5 !px-3 text-xs"
-                    title={
-                      t("archive_hint") === "archive_hint"
-                        ? "Archive (soft delete — can be restored)"
-                        : t("archive_hint")
-                    }
-                    onClick={() => archive(v)}
-                  >
-                    <span className="msr text-[16px]">archive</span>
-                  </button>
-                )}
-                {can(user, "hard_delete_vehicle") && (
-                  <button
-                    className="btn btn-danger !py-1.5 !px-3 text-xs"
-                    title={
-                      t("delete_perm_hint") === "delete_perm_hint"
-                        ? "Delete permanently"
-                        : t("delete_perm_hint")
-                    }
-                    onClick={() => hardDelete(v)}
-                  >
-                    <span className="msr text-[16px]">delete</span>
-                  </button>
-                )}
               </div>
-            )}
-          </div>
-        ))}
-        {vehicles.length === 0 && <div className="text-sm text-muted">{t("no_cars")}</div>}
-      </div>
+
+              {(canEdit || canFleet) && <div className="pt-1">{renderActions(v)}</div>}
+            </div>
+          ))}
+          {vehicles.length === 0 && <div className="text-sm text-muted">{t("no_cars")}</div>}
+        </div>
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-muted border-b border-line">
+                <th className="p-2.5 font-medium">{t("col_model")}</th>
+                <th className="p-2.5 font-medium">{t("col_year")}</th>
+                <th className="p-2.5 font-medium">{t("col_plate")}</th>
+                <th className="p-2.5 font-medium">{t("col_color")}</th>
+                <th className="p-2.5 font-medium">{tf("col_mileage", "Mileage")}</th>
+                <th className="p-2.5 font-medium">{t("col_status")}</th>
+                <th className="p-2.5 font-medium text-right">{t("col_rate")}</th>
+                {(canEdit || canFleet) && (
+                  <th className="p-2.5 font-medium text-right">{tf("col_actions", "Actions")}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {vehicles.map((v) => (
+                <tr key={v.vehicle_id} className="border-b border-line last:border-0 align-top">
+                  <td className="p-2.5">
+                    <span className="font-medium text-ink">{v.make_model}</span>
+                    <span className="text-muted"> · {v.vehicle_id}</span>
+                  </td>
+                  <td className="p-2.5 text-muted">{v.year || "—"}</td>
+                  <td className="p-2.5 text-muted">{v.license_plate || "—"}</td>
+                  <td className="p-2.5 text-muted">{v.color || "—"}</td>
+                  <td className="p-2.5 text-muted">{v.mileage != null ? v.mileage : "—"}</td>
+                  <td className="p-2.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <StatusBadge status={v.status} />
+                      {v.locked && (
+                        <span className="badge badge-warn">
+                          <span className="msr text-[13px]">lock</span>
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="p-2.5 text-right font-medium">{formatEur(v.base_daily_rate)}</td>
+                  {(canEdit || canFleet) && (
+                    <td className="p-2.5">
+                      <div className="flex justify-end">{renderActions(v)}</div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {vehicles.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-4 text-sm text-muted text-center">
+                    {t("no_cars")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {adding && (
         <Modal title={t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")} onClose={() => setAdding(false)}>
@@ -394,6 +479,7 @@ export default function FleetPage() {
             submitLabel={t("add_btn") === "add_btn" ? "Add" : t("add_btn")}
             onSubmit={async (f) => {
               await apiPost("/api/vehicles", f);
+              toast.success(tf("vehicle_added", "Vehicle added."));
               setAdding(false);
               load();
             }}
@@ -426,6 +512,7 @@ export default function FleetPage() {
             submitLabel={t("update_btn") === "update_btn" ? "Save" : t("update_btn")}
             onSubmit={async (f) => {
               await apiPut(`/api/vehicles/${editing.vehicle_id}`, f);
+              toast.success(tf("vehicle_updated", "Vehicle updated."));
               setEditing(null);
               load();
             }}

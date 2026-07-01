@@ -172,6 +172,10 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
     # super-admin enabled it). Render the PNGs once and reuse across both copies.
     qrs = invoice_links.build_invoice_qrs(deal, business_name, T, balance_due, inv_no)
     qr_cache = {q["key"]: invoice_links.qr_png_bytes(q["payload"], scale=5) for q in qrs}
+    # Quick-action pills (rental total, bank/IBAN, return address, balance, call,
+    # WhatsApp) — built once and reused across both copies (settings read once).
+    acts = invoice_links.build_quick_actions(deal, business_name, T, grand_total,
+                                             balance_due, inv_no)
 
     def _draw(copy_label: str):
         # ── copy tag (Customer Copy / Office Copy), small, top-right ──────────
@@ -357,24 +361,74 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
                 pdf.set_font(F, "", 5.5)
                 pdf.set_text_color(*_MUTED)
                 pdf.cell(cellw, 3, text=q["caption"], align="C")
-            pdf.set_y(qy + qsz + 9)
+            pdf.set_y(qy + qsz + 6)
+
+        # ── quick-action pills — three per row (rental total, bank/IBAN, return,
+        #    balance, call, WhatsApp). Deliberately compact so the whole invoice stays
+        #    on ONE A4 page per copy. https links (return, WhatsApp) become clickable
+        #    rectangles; tel: and info values render as plain text. The heading is only
+        #    drawn when the QR block above didn't already print one; an overflow guard
+        #    is the safety net if a very long terms list leaves no room. ──
+        if acts:
+            if not qrs:
+                pdf.set_x(L)
+                pdf.set_font(F, "B", 7)
+                pdf.set_text_color(*_MUTED)
+                pdf.cell(0, 4, text=T("invoice_quick_links").upper(),
+                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            cols, gap, pill_h, row_gap = 3, 3, 6, 1.2
+            pill_w = (R - L - (cols - 1) * gap) / cols
+            rows_used = (len(acts) + cols - 1) // cols
+            start_y = pdf.get_y() + 1
+            if start_y + rows_used * (pill_h + row_gap) > 280:
+                pdf.add_page()
+                start_y = pdf.get_y()
+            for i, a in enumerate(acts):
+                x = L + (i % cols) * (pill_w + gap)
+                y = start_y + (i // cols) * (pill_h + row_gap)
+                pdf.set_draw_color(*_TEXT)
+                pdf.set_line_width(0.2)
+                if a["href"]:
+                    pdf.rect(x, y, pill_w, pill_h, style="D")
+                else:
+                    pdf.set_fill_color(*_LIGHT)
+                    pdf.rect(x, y, pill_w, pill_h, style="DF")
+                pdf.set_xy(x + 2, y + 0.8)
+                pdf.set_font(F, "B", 5)
+                pdf.set_text_color(*_MUTED)
+                pdf.cell(pill_w - 4, 2.6, text=a["label"].upper())
+                link = a["href"] if a["href"].startswith("http") else ""
+                pdf.set_xy(x + 2, y + 3.3)
+                pdf.set_text_color(*(_ACCENT if link else _TEXT))
+                # Shrink the value font (down to 5pt) so a full IBAN / address is never
+                # ellipsis-truncated — a partial, unpayable account number is worse than
+                # small type. Target _fit()'s own threshold (width-2) with 1mm to spare
+                # so the follow-up _fit() only clips a value still too wide at 5pt.
+                inner = pill_w - 4
+                budget = inner - 3
+                pdf.set_font(F, "B", 7.5)
+                vw = pdf.get_string_width(a["value"])
+                if vw > budget and vw > 0:
+                    pdf.set_font(F, "B", max(5.0, 7.5 * budget / vw))
+                pdf.cell(inner, 2.8, text=_fit(pdf, a["value"], inner), link=link)
+            pdf.set_y(start_y + rows_used * (pill_h + row_gap) + 1)
 
         # ── terms & conditions ──────────────────────────────────────────────────
         terms = rental_terms(lang)
-        pdf.ln(2)
+        pdf.ln(1)
         pdf.set_x(L)
-        pdf.set_font(F, "B", 9)
+        pdf.set_font(F, "B", 8.5)
         pdf.set_text_color(*_TEXT)
-        pdf.multi_cell(0, 5, text=_txt(terms.get("title", "")),
+        pdf.multi_cell(0, 4.5, text=_txt(terms.get("title", "")),
                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_font(F, "", 7.5)
+        pdf.set_font(F, "", 7)
         pdf.set_text_color(*_MUTED)
         for i, rule in enumerate(terms.get("rules", []), start=1):
             pdf.set_x(L)
-            pdf.multi_cell(0, 3.8, text=f"{i}. {rule}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.multi_cell(0, 3.3, text=f"{i}. {rule}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # ── signatures (customer + authorized; seal above the authorized line) ──
-        pdf.ln(5)
+        pdf.ln(3)
         sy = pdf.get_y()
         gap = 18
         col_w = (R - L - gap) / 2
@@ -679,7 +733,18 @@ def _parse_dt(value):
 def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
                        business_name: str = "", lang: str = "tr",
                        logo: str = "", now: datetime | None = None,
-                       windows: list | None = None) -> bytes:
+                       windows: list | None = None, *,
+                       row_key: str = "vehicle_id",
+                       row_label=None,
+                       bar_label_key: str = "client_name",
+                       header_label: str | None = None,
+                       bar_state=None) -> bytes:
+    """`vehicles` is the row list and `rentals` the bars. By default rows are keyed
+    by vehicle (the fleet occupancy Gantt). The keyword params let a caller re-key
+    the same drawing by any field — e.g. customers-as-rows with car-labelled bars
+    for the Customers-page report: pass row_key='cust_key', a row_label callable,
+    bar_label_key='car_label', a header_label, and bar_state=lambda r,now:'ok' to
+    render every rental with a neutral tint (a history view, not a live board)."""
     """Landscape-A4 Gantt of fleet occupancy: one row per vehicle, each Active
     rental drawn as a bar on a shared day axis, coloured by return-state
     (grey/amber/red) exactly like the on-screen timeline (ui/timeline.py).
@@ -741,9 +806,9 @@ def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
         step = next(d for d in (1, 2, 3, 7, 14, 30, 60, 90, 180, 365)
                     if span_days / d <= 12)
 
-        by_vehicle = {}
+        by_row = {}
         for r in wr:
-            by_vehicle.setdefault(r.get("vehicle_id"), []).append(r)
+            by_row.setdefault(r.get(row_key), []).append(r)
 
         def _veh_label(v):
             lab = _txt(v.get("make_model"))
@@ -751,6 +816,8 @@ def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
             if plate:
                 lab += f" · {plate}"
             return f'{v.get("vehicle_id")} · {lab}'
+
+        _row_label = row_label or _veh_label
 
         # ── header geometry (constant across this section's pages) ────────────
         top = 12
@@ -843,7 +910,7 @@ def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
             pdf.set_xy(L, ddmm_y)
             pdf.set_font(F, "B", 8)
             pdf.set_text_color(*_MUTED)
-            pdf.cell(label_w, 4, text=T("col_id"))
+            pdf.cell(label_w, 4, text=(header_label if header_label is not None else T("col_id")))
 
             if t_min <= now <= t_max:
                 nx = x_of(now)
@@ -880,12 +947,12 @@ def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
                 pdf.set_font(F, "", 8)
                 pdf.set_text_color(*_TEXT)
                 pdf.set_xy(L, row_y + 1.5)
-                pdf.cell(label_w - 2, row_h - 3, text=_fit(pdf, _veh_label(v), label_w - 2))
-                for r in by_vehicle.get(v.get("vehicle_id"), []):
+                pdf.cell(label_w - 2, row_h - 3, text=_fit(pdf, _row_label(v), label_w - 2))
+                for r in by_row.get(v.get(row_key), []):
                     s, e = _parse_dt(r.get("start_dt")), _parse_dt(r.get("end_dt"))
                     if not (s and e):
                         continue
-                    state, _ = return_state(r.get("end_dt"), now)
+                    state = bar_state(r, now) if bar_state else return_state(r.get("end_dt"), now)[0]
                     x1, x2 = x_of(s), x_of(e)
                     bw = max(x2 - x1, 1.5)
                     # card mirrors the on-screen bar: status tint + a full near-black
@@ -894,7 +961,7 @@ def build_timeline_pdf(vehicles: list[dict], rentals: list[dict],
                     pdf.set_draw_color(*_CARD_BORDER)
                     pdf.set_line_width(0.3)
                     pdf.rect(x1, row_y + 1.3, bw, row_h - 2.6, style="DF")
-                    nm = _txt(r.get("client_name"))
+                    nm = _txt(r.get(bar_label_key))
                     if bw > 13 and nm:
                         pdf.set_font(F, "B", 7)
                         pdf.set_text_color(*(_ALERT_TEXT if state == "overdue" else _TEXT))

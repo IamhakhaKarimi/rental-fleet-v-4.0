@@ -320,10 +320,15 @@ export function Timeline() {
                         const isHi = barHi(r);
                         const dim = q && !isHi;
                         const tone = barTone(r);
+                        // A currently-underway normal rental (start reached, not an
+                        // amber/red alert) gets the faded sky-blue "started" wash.
+                        const started = parse(r.start_dt) <= now;
                         return (
                           <div
                             key={r.deal_id}
-                            className={`cal-bar cal-bar--${tone}`}
+                            className={`cal-bar cal-bar--${tone}${
+                              tone === "ok" && started ? " cal-bar--started" : ""
+                            }`}
                             style={{
                               left,
                               width: Math.max(10, right - left),

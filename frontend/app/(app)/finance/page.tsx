@@ -15,9 +15,9 @@ import {
 import { api, apiDel, apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
-import { Kpi } from "@/components/Kpi";
 
 /* ── Response shapes (from backend/services/finance_service.py) ──────────────
    All money fields are INTEGER CENTS. */
@@ -108,6 +108,7 @@ type TabKey = "overview" | "monthly" | "yearly" | "vehicle" | "customer" | "cost
 export default function FinancePage() {
   const t = useT();
   const { user } = useAuth();
+  const toast = useToast();
   // t() returns the key itself when missing — keep the Fleet-page fallback idiom.
   const tx = useCallback((k: string, fallback: string) => (t(k) === k ? fallback : t(k)), [t]);
 
@@ -164,7 +165,7 @@ export default function FinancePage() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      alert(tx(e?.key || "error", "Could not download report."));
+      toast.error(tx(e?.key || "error", "Could not download report."));
     }
   }
 
@@ -191,13 +192,13 @@ export default function FinancePage() {
 
   const costLabel = (type: string) => tx(`cost_${type}`, type.charAt(0).toUpperCase() + type.slice(1));
 
-  const tabs: { key: TabKey; label: string }[] = [
-    { key: "overview", label: tx("fin_tab_overview", "Overview") },
-    { key: "monthly", label: tx("fin_tab_monthly", "Monthly") },
-    { key: "yearly", label: tx("fin_tab_yearly", "Yearly") },
-    { key: "vehicle", label: tx("fin_tab_vehicle", "By Vehicle") },
-    { key: "customer", label: tx("fin_tab_customer", "By Customer") },
-    { key: "costs", label: tx("fin_tab_costs", "Costs") },
+  const tabs: { key: TabKey; label: string; icon: string }[] = [
+    { key: "overview", label: tx("fin_tab_overview", "Overview"), icon: "donut_small" },
+    { key: "monthly", label: tx("fin_tab_monthly", "Monthly"), icon: "calendar_month" },
+    { key: "yearly", label: tx("fin_tab_yearly", "Yearly"), icon: "calendar_today" },
+    { key: "vehicle", label: tx("fin_tab_vehicle", "By Vehicle"), icon: "directions_car" },
+    { key: "customer", label: tx("fin_tab_customer", "By Customer"), icon: "group" },
+    { key: "costs", label: tx("fin_tab_costs", "Costs"), icon: "payments" },
   ];
 
   return (
@@ -207,36 +208,100 @@ export default function FinancePage() {
         <h1 className="text-xl font-bold">{tx("nav_finance", "Finance")}</h1>
       </div>
 
-      {/* Headline KPI tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi
-          label={tx("total_revenue", "Total Revenue")}
-          value={formatEur(summary?.income ?? 0)}
-          icon="trending_up"
-          accent
-        />
-        <Kpi label={tx("col_cost", "Total Cost")} value={formatEur(summary?.cost ?? 0)} icon="trending_down" />
-        <Kpi
-          label={tx("net_profit", "Net Profit")}
-          value={formatEur(summary?.net ?? 0)}
-          icon="account_balance"
-          accent={(summary?.net ?? 0) >= 0}
-        />
-        <Kpi
-          label={tx("profit_margin", "Profit Margin")}
-          value={`${summary?.margin ?? 0}%`}
-          icon="percent"
-        />
+      {/* Headline finance figures — bento board (mirrors the dashboard's
+          "Fleet at a glance" board so the two pages share one visual language). */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 [grid-auto-rows:minmax(116px,auto)]">
+        {/* Hero — net profit + margin bar */}
+        <div
+          className="bento-in card col-span-2 row-span-2 p-6 flex flex-col justify-between"
+          style={{ background: "var(--accent)", color: "var(--bg)", border: "none" }}
+        >
+          <div className="flex items-center gap-2 text-sm" style={{ opacity: 0.75 }}>
+            <span className="msr text-[18px]">account_balance</span>
+            {tx("net_profit", "Net Profit")}
+          </div>
+          <div>
+            <div className="text-4xl font-bold leading-none" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {formatEur(summary?.net ?? 0)}
+            </div>
+            <div
+              className="mt-4 h-2 rounded-full overflow-hidden"
+              style={{ background: "rgba(255,255,255,0.25)" }}
+            >
+              <div
+                className="h-full rounded-full transition-[width] duration-500"
+                style={{
+                  width: `${Math.max(0, Math.min(100, summary?.margin ?? 0))}%`,
+                  background: "var(--bg)",
+                }}
+              />
+            </div>
+            <div className="text-xs mt-1.5" style={{ opacity: 0.8 }}>
+              {summary?.margin ?? 0}% {tx("profit_margin", "margin")}
+            </div>
+          </div>
+        </div>
+
+        {/* Revenue */}
+        <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "45ms" }}>
+          <div className="flex items-center gap-1.5 text-xs text-muted">
+            <span className="msr text-[16px]">trending_up</span>
+            {tx("total_revenue", "Total Revenue")}
+          </div>
+          <div className="text-2xl font-bold text-accent mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
+            {formatEur(summary?.income ?? 0)}
+          </div>
+        </div>
+
+        {/* Cost */}
+        <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "90ms" }}>
+          <div className="flex items-center gap-1.5 text-xs text-muted">
+            <span className="msr text-[16px]">trending_down</span>
+            {tx("col_cost", "Total Cost")}
+          </div>
+          <div className="text-2xl font-bold text-ink mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
+            {formatEur(summary?.cost ?? 0)}
+          </div>
+        </div>
+
+        {/* Revenue mix — wide strip (rental / penalty / damage) */}
+        <div
+          className="bento-in card col-span-2 p-5 flex items-center justify-between gap-2"
+          style={{ animationDelay: "135ms" }}
+        >
+          {[
+            { k: "rental_revenue", fb: "Rental", v: revenue?.rental ?? 0, icon: "vpn_key" },
+            { k: "penalty_revenue", fb: "Penalty", v: revenue?.penalty ?? 0, icon: "gavel" },
+            { k: "damage_revenue", fb: "Damage", v: revenue?.damage ?? 0, icon: "report" },
+          ].map((it) => (
+            <div key={it.k} className="min-w-0 flex-1">
+              <div className="flex items-center gap-1 text-[11px] text-muted truncate">
+                <span className="msr text-[14px]">{it.icon}</span>
+                {tx(it.k, it.fb)}
+              </div>
+              <div
+                className="text-base font-bold text-ink truncate"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {formatEur(it.v)}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 flex-wrap border-b border-line pb-2">
+      {/* Tab menu — bento pill bar */}
+      <div
+        className="bento-in card p-1.5 flex items-center gap-1 flex-wrap"
+        style={{ animationDelay: "180ms" }}
+      >
         {tabs.map((tb) => (
           <button
             key={tb.key}
             onClick={() => setTab(tb.key)}
-            className={`seg-btn rounded-lg ${tab === tb.key ? "active" : ""}`}
+            className={`seg-btn rounded-lg flex items-center gap-1.5 ${tab === tb.key ? "active" : ""}`}
           >
+            <span className="msr text-[16px]">{tb.icon}</span>
             {tb.label}
           </button>
         ))}
@@ -643,6 +708,7 @@ function CostsTab({
   onChanged: () => void;
   reportButtons: React.ReactNode;
 }) {
+  const toast = useToast();
   const today = new Date().toISOString().slice(0, 10);
   const [vehicleId, setVehicleId] = useState("");
   const [costType, setCostType] = useState<string>("maintenance");
@@ -688,7 +754,7 @@ function CostsTab({
       await apiDel(`/api/finance/costs/${c.cost_id}`);
       onChanged();
     } catch (e: any) {
-      alert(tx(e?.key || "error", "Could not delete."));
+      toast.error(tx(e?.key || "error", "Could not delete."));
     }
   }
 

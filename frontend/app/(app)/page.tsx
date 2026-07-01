@@ -1,11 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
-import { apiGet } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
-import { Kpi } from "@/components/Kpi";
 import { Timeline } from "@/components/Timeline";
 import { NightModeToggle } from "@/components/NightModeToggle";
 import { Modal } from "@/components/Modal";
@@ -13,6 +12,15 @@ import { BookingDialog } from "@/components/BookingDialog";
 import { StatusBadge } from "@/components/StatusBadge";
 import { VisitorHome } from "@/components/VisitorHome";
 import type { FleetCounts, Vehicle } from "@/lib/types";
+
+// Whole-day span between two local "YYYY-MM-DD" strings — parsed as local dates
+// (not UTC) so the count can't drift across timezones. Sizes the availability
+// window for the "check free cars" range picker below.
+const daysBetweenISO = (a: string, b: string) => {
+  const [y1, m1, d1] = a.split("-").map(Number);
+  const [y2, m2, d2] = b.split("-").map(Number);
+  return Math.round((new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime()) / 86400000);
+};
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -22,6 +30,14 @@ export default function DashboardPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [bookingCar, setBookingCar] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [freeIds, setFreeIds] = useState<Set<string> | null>(null);
+  // Availability-window picker modal: edits happen on draft copies and only commit
+  // to startDate/endDate on "OK", so Cancel/Esc discards without re-querying.
+  const [dateOpen, setDateOpen] = useState(false);
+  const [draftStart, setDraftStart] = useState("");
+  const [draftEnd, setDraftEnd] = useState("");
 
   const load = () => apiGet<Vehicle[]>("/api/vehicles").then(setVehicles).catch(() => {});
   useEffect(() => {
@@ -30,8 +46,109 @@ export default function DashboardPage() {
   }, []);
 
   const available = vehicles.filter((v) => v.status === "Available");
+
+  // Fleet-at-a-glance figures for the bento board below the timeline.
+  const total = counts?.total ?? vehicles.length;
+  const avail = counts?.available ?? available.length;
+  const rented = counts?.rented ?? 0;
+  const garage = counts?.garage ?? 0;
+  const util = total ? Math.round((rented / total) * 100) : 0;
+  const featured = available[0];
+
+  // Availability-by-range: ask the scheduler which vehicle ids are free across the
+  // chosen window (start 10:00 → end 10:00; a lone start date checks a single day),
+  // then map those ids back onto the live fleet so the cards keep year/colour/rate.
+  // No start date → today's live availability. Read-only query — nothing is written.
+  useEffect(() => {
+    if (!startDate) {
+      setFreeIds(null);
+      return;
+    }
+    const days = endDate ? Math.max(1, daysBetweenISO(startDate, endDate)) : 1;
+    let active = true;
+    apiPost<{ cars: { vehicle_id: string }[] }>("/api/rentals/available-cars", {
+      start_date: startDate,
+      start_time: "10:00",
+      days,
+      return_time: "10:00",
+    })
+      .then((d) => active && setFreeIds(new Set(d.cars.map((c) => c.vehicle_id))))
+      .catch(() => active && setFreeIds(new Set()));
+    return () => {
+      active = false;
+    };
+  }, [startDate, endDate]);
+
+  // Derived from the live fleet so a vehicles refresh doesn't re-hit the API.
+  const dateCars = useMemo(
+    () => (freeIds ? vehicles.filter((v) => freeIds.has(v.vehicle_id)) : null),
+    [freeIds, vehicles]
+  );
+  const shownCars = dateCars ?? available;
+  // Whole-day span of the committed window (0 when there's no real range) — shown next
+  // to the dates in the heading and inside the picker so the length is explicit.
+  const rangeDays =
+    startDate && endDate && endDate !== startDate
+      ? Math.max(1, daysBetweenISO(startDate, endDate))
+      : 0;
   const roleLabel = user ? t(user.role_label_key) : "";
   const canBook = can(user, "create_reservation");
+
+  // Availability carousel (shown once a date window is picked): a horizontally
+  // swipeable strip of the free cars with prev/next buttons that wrap around —
+  // paging past the last card loops back to the first, and vice versa.
+  const carRef = useRef<HTMLDivElement>(null);
+  const [carIdx, setCarIdx] = useState(0);
+  const scrollToCar = (i: number) => {
+    const el = carRef.current?.children[i] as HTMLElement | undefined;
+    el?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+  };
+  const goCar = (dir: number) => {
+    const n = shownCars.length;
+    if (!n) return;
+    const next = (carIdx + dir + n) % n; // wrap-around → infinite paging
+    setCarIdx(next);
+    scrollToCar(next);
+  };
+  // Keep the index synced with manual swipes so the buttons resume from the card
+  // currently in view.
+  const onCarScroll = () => {
+    const track = carRef.current;
+    if (!track || track.children.length === 0) return;
+    const first = track.children[0] as HTMLElement;
+    const step = first.offsetWidth + 12; // card width + gap-3 (0.75rem)
+    setCarIdx(Math.round(track.scrollLeft / step));
+  };
+  // Reset to the first card whenever the free-car set changes (new date window).
+  useEffect(() => {
+    setCarIdx(0);
+    carRef.current?.scrollTo({ left: 0 });
+  }, [freeIds, startDate, endDate]);
+
+  const renderCarCard = (v: Vehicle) => (
+    <>
+      <div className="h-[120px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted">
+        <span className="msr text-[34px]">directions_car</span>
+      </div>
+      <div className="font-semibold text-ink">
+        {v.make_model}
+        {v.year ? ` · ${v.year}` : ""}
+      </div>
+      <div className="text-xs text-muted flex items-center gap-1">
+        <span className="msr text-[14px]">directions_car</span>
+        {v.vehicle_id} · {v.license_plate || "—"}
+      </div>
+      <div className="font-bold text-accent">
+        {formatEur(v.base_daily_rate)} <span className="text-xs text-muted font-normal">/ day</span>
+      </div>
+      {canBook && (
+        <button className="btn btn-primary w-full" onClick={() => setBookingCar(v.vehicle_id)}>
+          <span className="msr text-[18px]">add</span>
+          {tf("rent", "Rent")}
+        </button>
+      )}
+    </>
+  );
   const isStaff = can(user, "view_management");
   const ql = q.trim().toLowerCase();
   const fleetShown = ql
@@ -66,45 +183,232 @@ export default function DashboardPage() {
         <Timeline />
       </section>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi label={t("kpi_total")} value={counts?.total ?? "—"} icon="directions_car" />
-        <Kpi label={t("kpi_available")} value={counts?.available ?? "—"} icon="check_circle" accent />
-        <Kpi label={t("kpi_rented")} value={counts?.rented ?? "—"} icon="vpn_key" />
-        <Kpi label={t("kpi_garage")} value={counts?.garage ?? "—"} icon="build" />
-      </div>
-
-      <section className="space-y-3">
+      {/* Fleet at a glance — bento board (sits below the timeline; the timeline
+          section above is left untouched). Folds the four fleet KPIs into a richer
+          board with a live utilization bar and a featured available car. */}
+      <section className="space-y-2.5">
         <h2 className="text-sm font-semibold flex items-center gap-2 text-muted">
-          <span className="msr text-[18px]">directions_car</span>
-          {t("available_cars")} ({available.length})
+          <span className="msr text-[18px]">dashboard</span>
+          {tf("fleet_at_a_glance", "Fleet at a glance")}
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {available.map((v) => (
-            <div key={v.vehicle_id} className="card p-3 space-y-2">
-              <div className="h-[120px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted">
-                <span className="msr text-[34px]">directions_car</span>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 [grid-auto-rows:minmax(140px,auto)]">
+          {/* Hero — availability + utilization */}
+          <div
+            className="bento-in card col-span-2 row-span-2 p-6 flex flex-col justify-between"
+            style={{ background: "var(--accent)", color: "var(--bg)", border: "none" }}
+          >
+            <div className="flex items-center gap-2 text-sm" style={{ opacity: 0.75 }}>
+              <span className="msr text-[18px]">directions_car</span>
+              {tf("available_cars", "Available now")}
+            </div>
+            <div>
+              <div className="flex items-end gap-2.5">
+                <span
+                  className="text-6xl font-bold leading-none"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  {avail}
+                </span>
+                <span className="text-sm pb-1.5" style={{ opacity: 0.8 }}>
+                  / {total} {tf("fleet_size", "in fleet")}
+                </span>
               </div>
-              <div className="font-semibold text-ink">
-                {v.make_model}
-                {v.year ? ` · ${v.year}` : ""}
+              <div
+                className="mt-4 h-2 rounded-full overflow-hidden"
+                style={{ background: "rgba(255,255,255,0.25)" }}
+              >
+                <div
+                  className="h-full rounded-full transition-[width] duration-500"
+                  style={{ width: `${util}%`, background: "var(--bg)" }}
+                />
               </div>
-              <div className="text-xs text-muted flex items-center gap-1">
-                <span className="msr text-[14px]">directions_car</span>
-                {v.vehicle_id} · {v.license_plate || "—"}
+              <div className="text-xs mt-1.5" style={{ opacity: 0.8 }}>
+                {util}% {tf("utilization", "utilized")}
               </div>
-              <div className="font-bold text-accent">
-                {formatEur(v.base_daily_rate)} <span className="text-xs text-muted font-normal">/ day</span>
+            </div>
+          </div>
+
+          {/* Rented */}
+          <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "45ms" }}>
+            <div className="flex items-center gap-1.5 text-xs text-muted">
+              <span className="msr text-[16px]">vpn_key</span>
+              {t("kpi_rented")}
+            </div>
+            <div className="text-4xl font-bold text-ink mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {rented}
+            </div>
+          </div>
+
+          {/* Available (stat) */}
+          <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "90ms" }}>
+            <div className="flex items-center gap-1.5 text-xs text-muted">
+              <span className="msr text-[16px]">check_circle</span>
+              {t("kpi_available")}
+            </div>
+            <div className="text-4xl font-bold text-accent mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {avail}
+            </div>
+          </div>
+
+          {/* Garage / maintenance — wide */}
+          <div className="bento-in card col-span-2 p-5 flex items-center gap-4" style={{ animationDelay: "135ms" }}>
+            <div className="w-11 h-11 rounded-full bg-bg border border-line flex items-center justify-center shrink-0">
+              <span className="msr text-[22px] text-muted">build</span>
+            </div>
+            <div>
+              <div className="text-3xl font-bold text-ink" style={{ fontVariantNumeric: "tabular-nums" }}>
+                {garage}
+              </div>
+              <div className="text-xs text-muted">{t("kpi_garage")}</div>
+            </div>
+          </div>
+
+          {/* Featured available car — full-width feature strip */}
+          {featured ? (
+            <div
+              className="bento-in card col-span-2 md:col-span-4 p-4 flex flex-row items-center gap-4"
+              style={{ animationDelay: "180ms" }}
+            >
+              <div className="w-[96px] h-[80px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted shrink-0">
+                <span className="msr text-[36px]">directions_car</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] uppercase tracking-wide text-muted">
+                  {tf("featured_car", "Featured")}
+                </div>
+                <div className="font-semibold text-ink truncate">
+                  {featured.make_model}
+                  {featured.year ? ` · ${featured.year}` : ""}
+                </div>
+                <div className="font-bold text-accent mt-0.5">
+                  {formatEur(featured.base_daily_rate)}{" "}
+                  <span className="text-xs text-muted font-normal">/ day</span>
+                </div>
               </div>
               {canBook && (
-                <button className="btn btn-primary w-full" onClick={() => setBookingCar(v.vehicle_id)}>
+                <button
+                  className="btn btn-primary shrink-0"
+                  onClick={() => setBookingCar(featured.vehicle_id)}
+                >
                   <span className="msr text-[18px]">add</span>
                   {tf("rent", "Rent")}
                 </button>
               )}
             </div>
-          ))}
-          {available.length === 0 && <div className="text-sm text-muted">{t("no_cars")}</div>}
+          ) : (
+            <div
+              className="bento-in card col-span-2 md:col-span-4 p-5 flex items-center justify-center text-sm text-muted"
+              style={{ animationDelay: "180ms" }}
+            >
+              {t("no_cars")}
+            </div>
+          )}
         </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-sm font-semibold flex items-center gap-2 text-muted">
+            <span className="msr text-[18px]">directions_car</span>
+            {t("available_cars")} ({shownCars.length})
+            {startDate && (
+              <span className="text-xs font-normal text-accent">
+                · {startDate}
+                {endDate && endDate !== startDate ? ` → ${endDate}` : ""}
+                {rangeDays > 0 ? ` · ${rangeDays} ${tf("days_short", "days")}` : ""}
+              </span>
+            )}
+          </h2>
+          {canBook && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                className="btn !py-1.5 text-xs flex items-center gap-2"
+                onClick={() => {
+                  setDraftStart(startDate);
+                  setDraftEnd(endDate);
+                  setDateOpen(true);
+                }}
+                title={tf("check_date_hint", "Check which cars are free from this date")}
+              >
+                <span className="msr text-[16px]">calendar_month</span>
+                {startDate ? (
+                  <span className="tabular-nums">
+                    {startDate}
+                    {endDate && endDate !== startDate ? ` → ${endDate}` : ""}
+                    {rangeDays > 0 ? ` · ${rangeDays} ${tf("days_short", "days")}` : ""}
+                  </span>
+                ) : (
+                  tf("select_dates", "Select dates")
+                )}
+              </button>
+              {(startDate || endDate) && (
+                <button
+                  className="btn !p-2"
+                  onClick={() => {
+                    setStartDate("");
+                    setEndDate("");
+                  }}
+                  title={tf("clear", "Clear")}
+                  aria-label={tf("clear", "Clear")}
+                >
+                  <span className="msr text-[16px]">close</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {shownCars.length === 0 ? (
+          <div className="text-sm text-muted">{t("no_cars")}</div>
+        ) : startDate ? (
+          /* Dates picked → swipeable availability carousel with wrap-around paging. */
+          <div className="relative">
+            <div
+              ref={carRef}
+              onScroll={onCarScroll}
+              className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {shownCars.map((v) => (
+                <div
+                  key={v.vehicle_id}
+                  className="card p-3 space-y-2 snap-start shrink-0 w-[260px] sm:w-[280px]"
+                >
+                  {renderCarCard(v)}
+                </div>
+              ))}
+            </div>
+            {shownCars.length > 1 && (
+              <div className="flex items-center justify-center gap-3 mt-2">
+                <button
+                  className="btn !p-2"
+                  onClick={() => goCar(-1)}
+                  aria-label={tf("prev", "Previous")}
+                  title={tf("prev", "Previous")}
+                >
+                  <span className="msr text-[18px]">chevron_left</span>
+                </button>
+                <span className="text-xs text-muted tabular-nums select-none">
+                  {Math.min(carIdx + 1, shownCars.length)} / {shownCars.length}
+                </span>
+                <button
+                  className="btn !p-2"
+                  onClick={() => goCar(1)}
+                  aria-label={tf("next", "Next")}
+                  title={tf("next", "Next")}
+                >
+                  <span className="msr text-[18px]">chevron_right</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {shownCars.map((v) => (
+              <div key={v.vehicle_id} className="card p-3 space-y-2">
+                {renderCarCard(v)}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Whole fleet */}
@@ -153,6 +457,83 @@ export default function DashboardPage() {
           </table>
         </div>
       </section>
+
+      {dateOpen && (
+        <Modal title={tf("select_dates", "Select dates")} onClose={() => setDateOpen(false)}>
+          <div className="space-y-4">
+            <p className="text-xs text-muted">
+              {tf("check_date_hint", "Check which cars are free from this date")}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted flex items-center gap-1">
+                  <span className="msr text-[15px]">event</span>
+                  {tf("date_from", "From")}
+                </span>
+                <input
+                  type="date"
+                  value={draftStart}
+                  max={draftEnd || undefined}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setDraftStart(v);
+                    // Drop an end date that now precedes the new start.
+                    if (draftEnd && v && draftEnd < v) setDraftEnd("");
+                  }}
+                  className="w-full"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted flex items-center gap-1">
+                  <span className="msr text-[15px]">event</span>
+                  {tf("date_to", "To")}
+                </span>
+                <input
+                  type="date"
+                  value={draftEnd}
+                  min={draftStart || undefined}
+                  disabled={!draftStart}
+                  onChange={(e) => setDraftEnd(e.target.value)}
+                  className="w-full"
+                />
+              </label>
+            </div>
+            {draftStart && draftEnd && draftEnd !== draftStart && (
+              <div className="text-sm text-accent flex items-center gap-1.5">
+                <span className="msr text-[16px]">event_available</span>
+                <b>
+                  {Math.max(1, daysBetweenISO(draftStart, draftEnd))} {tf("days_short", "days")}
+                </b>
+                <span className="text-muted text-xs">
+                  · {draftStart} → {draftEnd}
+                </span>
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-line">
+              <button
+                className="btn"
+                onClick={() => setDateOpen(false)}
+                aria-label={tf("cancel", "Cancel")}
+              >
+                <span className="msr text-[18px]">close</span>
+                {tf("cancel", "Cancel")}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setStartDate(draftStart);
+                  setEndDate(draftStart ? draftEnd : "");
+                  setDateOpen(false);
+                }}
+                aria-label={tf("ok", "OK")}
+              >
+                <span className="msr text-[18px]">check</span>
+                {tf("ok", "OK")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {bookingCar && canBook && (
         <Modal title={t("quick_register")} onClose={() => setBookingCar(null)} wide>

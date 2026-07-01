@@ -389,6 +389,11 @@ UI = {
     "qr_contact":            "Kontakt speichern",
     "qr_location":           "Finden / zurückgeben",
     "qr_summary":            "Mietübersicht",
+    "qa_total":              "Mietsumme",
+    "qa_iban":               "Bank / IBAN",
+    "qa_return":             "Rückgabeadresse",
+    "qa_balance":            "Restbetrag",
+    "qa_call":               "Anrufen",
     "qr_scan_hint":          "Mit dem Handy scannen",
     # theme customization (super-admin) + night mode
     "select_theme":          "Thema wählen",

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 
 // English fallback when a key isn't in the dictionary.
 const f = (t: (k: string) => string, key: string, fb: string) =>
@@ -16,6 +17,7 @@ interface InvoiceMeta {
 export default function Page({ params }: { params: { dealId: string } }) {
   const { dealId } = params;
   const t = useT();
+  const toast = useToast();
   const router = useRouter();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -90,7 +92,7 @@ export default function Page({ params }: { params: { dealId: string } }) {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      alert(e?.status === 404 ? f(t, "not_found", "Invoice not found.") : t(e?.key || "error"));
+      toast.error(e?.status === 404 ? f(t, "not_found", "Invoice not found.") : t(e?.key || "error"));
     } finally {
       setDownloading(false);
     }

@@ -389,6 +389,11 @@ UI = {
     "qr_contact":            "Ruaj kontaktin",
     "qr_location":           "Na gjej / kthe makinën",
     "qr_summary":            "Përmbledhja e qirasë",
+    "qa_total":              "Totali i qirasë",
+    "qa_iban":               "Banka / IBAN",
+    "qa_return":             "Adresa e kthimit",
+    "qa_balance":            "Shuma e mbetur",
+    "qa_call":               "Na telefononi",
     "qr_scan_hint":          "Skano me telefon",
     # theme customization (super-admin) + night mode
     "select_theme":          "Zgjidh temën",

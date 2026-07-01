@@ -37,6 +37,7 @@ PERMISSION_MIN_LEVEL = {
     "soft_delete_vehicle": 2,   # admin and up (status -> DELETED)
     "view_finance": 2,          # admin and up
     "manage_users": 2,          # admin and up (create users, set role/active)
+    "backup_database": 2,       # admin and up — export a full JSON backup / restore one
     "assign_admin_roles": 3,    # only super_admin may grant admin/super_admin
     "hard_delete_vehicle": 3,   # only super_admin may permanently remove a car
     "edit_business_settings": 3,  # only super_admin may rename the business

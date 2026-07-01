@@ -77,6 +77,7 @@ def db_health() -> JSONResponse:
 # rentals, finance, settings, invoices, i18n, meta, notifications, ...).
 from api.routers import activity as activity_router  # noqa: E402
 from api.routers import auth as auth_router  # noqa: E402
+from api.routers import customer_reports as customer_reports_router  # noqa: E402
 from api.routers import customers as customers_router  # noqa: E402
 from api.routers import finance as finance_router  # noqa: E402
 from api.routers import finance_reports as finance_reports_router  # noqa: E402
@@ -100,6 +101,7 @@ app.include_router(rentals_router.router)
 app.include_router(notifications_router.router)
 app.include_router(invoices_router.router)
 app.include_router(customers_router.router)
+app.include_router(customer_reports_router.router)
 app.include_router(finance_router.router)
 app.include_router(finance_reports_router.router)
 app.include_router(settings_account_router.router)

@@ -61,6 +61,19 @@ class CloseIn(BaseModel):
     contract_signed: bool = False
 
 
+class RateIn(BaseModel):
+    daily_rate_euros: float = 0
+
+
+class VehicleSwapIn(BaseModel):
+    vehicle_id: str
+
+
+class DatesIn(BaseModel):
+    return_date: str = ""
+    start_date: str = ""
+
+
 # ── Reads ───────────────────────────────────────────────────────────────────
 @router.get("/active")
 def active(user: dict = Depends(require("view_management"))) -> list[dict]:
@@ -122,7 +135,7 @@ def create(body: BookingIn, user: dict = Depends(require("create_reservation")))
 
 
 @router.put("/{deal_id}/rate")
-def update_rate(deal_id: str, body: "RateIn",
+def update_rate(deal_id: str, body: RateIn,
                 user: dict = Depends(require("create_reservation"))) -> dict:
     total = rrepo.update_rental_rate(deal_id, _cents(body.daily_rate_euros))
     if total < 0:
@@ -131,8 +144,22 @@ def update_rate(deal_id: str, body: "RateIn",
     return {"total": total}
 
 
+@router.put("/{deal_id}/dates")
+def update_dates(deal_id: str, body: DatesIn,
+                 user: dict = Depends(require("create_reservation"))) -> dict:
+    total = rrepo.update_rental_dates(deal_id, body.return_date, body.start_date)
+    if total == -1:
+        raise HTTPException(404, detail="not_found")
+    if total == -2:
+        raise HTTPException(400, detail="invalid_dates")
+    if total == -3:
+        raise HTTPException(409, detail="date_conflict")
+    audit_service.record(user, "edit_rental_dates", "rental", deal_id)
+    return {"total": total}
+
+
 @router.put("/{deal_id}/vehicle")
-def change_vehicle(deal_id: str, body: "VehicleSwapIn",
+def change_vehicle(deal_id: str, body: VehicleSwapIn,
                    user: dict = Depends(require("create_reservation"))) -> dict:
     if not rrepo.change_rental_vehicle(deal_id, body.vehicle_id):
         raise HTTPException(409, detail="no_cars")

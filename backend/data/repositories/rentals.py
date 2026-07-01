@@ -168,6 +168,52 @@ def update_rental_rate(deal_id: str, daily_rate_cents: int) -> int:
     return total
 
 
+def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "") -> int:
+    """Edit an Active rental's start and/or return DATE, keeping each end's existing
+    time-of-day. An empty string for either keeps the current value. Recomputes
+    rental_days, the total (rate × days) and keeps the 'rental' income charge in
+    sync. Rejects a return on/before the start, and a window that would clash with
+    another active booking of the same car. Returns the new total in cents, or a
+    negative code:
+        -1 rental missing/closed, -2 invalid dates (return <= start), -3 clash."""
+    from datetime import date, datetime
+    with get_engine().begin() as conn:
+        row = conn.execute(text(
+            "SELECT vehicle_id, start_dt, end_dt, daily_rate FROM rentals "
+            "WHERE deal_id=:d AND status='Active'"), {"d": deal_id}).mappings().first()
+        if not row:
+            return -1
+        cur_start = datetime.fromisoformat(row["start_dt"])
+        cur_end = datetime.fromisoformat(row["end_dt"])
+        try:
+            new_start_date = date.fromisoformat(start_date[:10]) if start_date else cur_start.date()
+            new_end_date = date.fromisoformat(return_date[:10]) if return_date else cur_end.date()
+        except ValueError:
+            return -2
+        new_start = datetime.combine(new_start_date, cur_start.time())
+        new_end = datetime.combine(new_end_date, cur_end.time())
+        days = (new_end_date - new_start_date).days
+        if days < 1 or new_end <= new_start:
+            return -2
+        s = new_start.strftime("%Y-%m-%dT%H:%M:%S")
+        e = new_end.strftime("%Y-%m-%dT%H:%M:%S")
+        clash = conn.execute(text(
+            "SELECT 1 FROM rentals WHERE vehicle_id=:v AND status='Active' "
+            "AND deal_id<>:d AND MAX(start_dt,:s) < MIN(end_dt,:e) LIMIT 1"
+        ), {"v": row["vehicle_id"], "d": deal_id, "s": s, "e": e}).first()
+        if clash:
+            return -3
+        total = int(row["daily_rate"]) * days
+        conn.execute(text(
+            "UPDATE rentals SET start_dt=:s, end_dt=:e, rental_days=:days, total_amount=:total "
+            "WHERE deal_id=:d"
+        ), {"s": s, "e": e, "days": days, "total": total, "d": deal_id})
+        conn.execute(text(
+            "UPDATE charges SET amount=:total WHERE deal_id=:d AND type='rental'"
+        ), {"total": total, "d": deal_id})
+    return total
+
+
 def change_rental_vehicle(deal_id: str, new_vehicle_id: str) -> bool:
     """Swap the car on an Active rental to `new_vehicle_id`. Verifies the new car
     is bookable (not archived/garaged/in-maintenance) and free for this rental's

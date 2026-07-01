@@ -7,8 +7,78 @@ transaction and deletes child rows before parents so the foreign keys
 fixed string literal — no f-string/identifier interpolation — so there is no
 dynamic-SQL surface at all. Returns the per-table counts removed.
 """
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from core.db import get_engine
+
+# Tables included in a full backup, in PARENT-FIRST dependency order (so inserts on
+# restore never trip a foreign key). Restore deletes in the reverse (child-first)
+# order for the same reason. `sessions` is intentionally excluded — those are
+# transient login tokens with no value in a backup. This is a fixed whitelist:
+# every table name below is a literal constant, never user input, so interpolating
+# it into SQL is not a dynamic-SQL surface.
+BACKUP_TABLES = [
+    "vehicles",
+    "customers",
+    "rentals",
+    "charges",
+    "vehicle_costs",
+    "users",
+    "audit_log",
+    "app_settings",
+    "vehicle_photos",
+    "licenses",
+]
+
+
+def export_all() -> dict:
+    """Read every backed-up table into a JSON-serialisable dict. All columns are
+    text / integer / NULL (money is INTEGER cents, images are base64 TEXT), so the
+    result is JSON-safe as-is. Dialect-agnostic — runs over the shared engine, so it
+    works on local SQLite, Turso/libSQL and Postgres alike."""
+    eng = get_engine()
+    tables: dict = {}
+    with eng.connect() as conn:
+        for tbl in BACKUP_TABLES:
+            rows = conn.execute(text(f"SELECT * FROM {tbl}")).mappings().all()
+            tables[tbl] = [dict(r) for r in rows]
+    return {"format": "bcr-backup", "version": 1, "tables": tables}
+
+
+def import_all(data: dict) -> dict:
+    """Replace the contents of every backed-up table with the rows in `data`
+    (as produced by export_all). Runs in ONE transaction: wipe child-first, then
+    insert parent-first, so an interrupted restore rolls back cleanly and foreign
+    keys never block. Column names are validated against the live table columns
+    before use, so a tampered backup can't inject SQL through a column name.
+    Returns {table: rows_inserted}."""
+    payload = data.get("tables") or {}
+    eng = get_engine()
+    insp = inspect(eng)
+    counts: dict = {}
+    with eng.begin() as conn:
+        # Wipe existing rows child-first (reverse dependency order) for FK safety.
+        for tbl in reversed(BACKUP_TABLES):
+            conn.execute(text(f"DELETE FROM {tbl}"))
+        # Re-insert parent-first.
+        for tbl in BACKUP_TABLES:
+            valid_cols = {c["name"] for c in insp.get_columns(tbl)}
+            rows = payload.get(tbl) or []
+            inserted = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                cols = [c for c in row.keys() if c in valid_cols]
+                if not cols:
+                    continue
+                col_list = ", ".join(cols)
+                placeholders = ", ".join(f":{c}" for c in cols)
+                params = {c: row[c] for c in cols}
+                conn.execute(
+                    text(f"INSERT INTO {tbl} ({col_list}) VALUES ({placeholders})"), params
+                )
+                inserted += 1
+            counts[tbl] = inserted
+    return counts
 
 
 def reset_finance() -> dict:

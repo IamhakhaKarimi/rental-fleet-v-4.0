@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { formatEur } from "@/lib/money";
 import type { LanguagesInfo } from "@/lib/types";
 
@@ -13,6 +14,22 @@ interface FreeCar {
 }
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+// Date helpers work on local "YYYY-MM-DD" strings (no UTC parsing) so the
+// estimated return date can't drift by a day across timezones.
+const addDaysISO = (iso: string, n: number) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${dt.getFullYear()}-${mm}-${dd}`;
+};
+const daysBetweenISO = (a: string, b: string) => {
+  const [y1, m1, d1] = a.split("-").map(Number);
+  const [y2, m2, d2] = b.split("-").map(Number);
+  return Math.round((new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime()) / 86400000);
+};
 
 /**
  * Quick Rental Registration. LEFT column = booking details (date/time, vehicle,
@@ -29,6 +46,7 @@ export function BookingDialog({
   preselectVehicleId?: string;
 }) {
   const t = useT();
+  const toast = useToast();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
 
   const [startDate, setStartDate] = useState(todayISO());
@@ -76,6 +94,15 @@ export function BookingDialog({
 
   const total = useMemo(() => days * rate * 100, [days, rate]);
 
+  // Estimated return date is derived from start date + days; editing it feeds
+  // back into `days` so the two inputs stay reciprocal. `days` remains the
+  // single source of truth sent to the API — no payload/database change.
+  const returnDate = useMemo(() => addDaysISO(startDate, days), [startDate, days]);
+  const onReturnDateChange = (iso: string) => {
+    if (!iso) return;
+    setDays(Math.max(1, daysBetweenISO(startDate, iso)));
+  };
+
   async function submit() {
     if (!name.trim() || !phone.trim()) {
       setErr(t("register_need_fields"));
@@ -102,6 +129,7 @@ export function BookingDialog({
         deposit_euros: deposit,
         invoice_lang: lang,
       });
+      toast.success(tf("register_ok", "Reservation created."));
       onCreated();
       onClose();
     } catch (e: any) {
@@ -117,40 +145,99 @@ export function BookingDialog({
       {/* LEFT — booking details */}
       <div className="space-y-3">
         <h3 className="text-sm font-semibold">{t("availability_title")}</h3>
-        <label className={lbl}>
-          {t("start_date")}
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        </label>
-        <div className="grid grid-cols-2 gap-3">
-          <label className={lbl}>
-            {t("start_time")}
-            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-          </label>
+
+        {/* Rental period — pick-up and return grouped together. Time inputs use a
+            60-second step so they show HH:MM (24-hour) with no seconds spinner. */}
+        <div className="rounded-xl border border-line bg-[rgba(17,24,39,0.02)] p-3 space-y-3">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-muted">
+            <span className="msr text-[16px]">calendar_month</span>
+            {tf("rental_period", "Rental period")}
+          </div>
+
+          {/* Pick-up */}
+          <div>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted mb-1">
+              <span className="msr text-[14px]">login</span>
+              {tf("pickup", "Pick-up")}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className={lbl}>
+                {t("start_date")}
+                <input type="date" min={todayISO()} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </label>
+              <label className={lbl}>
+                {t("start_time")}
+                <input type="time" step={60} value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+              </label>
+            </div>
+          </div>
+
+          {/* Return */}
+          <div>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted mb-1">
+              <span className="msr text-[14px]">logout</span>
+              {tf("return", "Return")}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className={lbl}>
+                {t("return_date")}
+                <input type="date" min={startDate} value={returnDate} onChange={(e) => onReturnDateChange(e.target.value)} />
+              </label>
+              <label className={lbl}>
+                {t("return_time")}
+                <input type="time" step={60} value={returnTime} onChange={(e) => setReturnTime(e.target.value)} />
+              </label>
+            </div>
+          </div>
+
           <label className={lbl}>
             {t("days")}
             <input type="number" min={1} value={days} onChange={(e) => setDays(Math.max(1, +e.target.value))} />
           </label>
         </div>
         <label className={lbl}>
-          {t("return_time")}
-          <input type="time" value={returnTime} onChange={(e) => setReturnTime(e.target.value)} />
-        </label>
-        <label className={lbl}>
           {t("select_car")} ({cars.length})
           <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
             {cars.map((c) => (
               <option key={c.vehicle_id} value={c.vehicle_id}>
                 {c.vehicle_id} · {c.make_model}
+                {c.license_plate ? ` · ${c.license_plate}` : ""}
               </option>
             ))}
             {cars.length === 0 && <option value="">{t("no_cars")}</option>}
           </select>
         </label>
         <div className="grid grid-cols-2 gap-3">
-          <label className={lbl}>
+          <div className={lbl}>
             {t("negotiated_rate")} (€)
-            <input type="number" min={0} value={rate} onChange={(e) => setRate(Math.max(0, +e.target.value))} />
-          </label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="btn !p-2"
+                onClick={() => setRate((r) => Math.max(0, r - 5))}
+                aria-label={tf("decrease", "Decrease")}
+                title="−5"
+              >
+                <span className="msr text-[16px]">remove</span>
+              </button>
+              <input
+                type="number"
+                min={0}
+                value={rate}
+                onChange={(e) => setRate(Math.max(0, +e.target.value))}
+                className="flex-1 text-center"
+              />
+              <button
+                type="button"
+                className="btn !p-2"
+                onClick={() => setRate((r) => r + 5)}
+                aria-label={tf("increase", "Increase")}
+                title="+5"
+              >
+                <span className="msr text-[16px]">add</span>
+              </button>
+            </div>
+          </div>
           <label className={lbl}>
             {t("deposit")} (€)
             <input type="number" min={0} value={deposit} onChange={(e) => setDeposit(Math.max(0, +e.target.value))} />

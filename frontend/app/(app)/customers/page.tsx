@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiDel, apiGet, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
+import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
 import type { LanguagesInfo } from "@/lib/types";
 
 // English fallback when a key isn't in the dictionary.
@@ -77,6 +79,7 @@ function CustomerDialog({
 }) {
   const { t, lang } = useI18n();
   const { user } = useAuth();
+  const toast = useToast();
 
   const canEdit = can(user, "service_vehicle");
   const canReassign = can(user, "edit_business_settings") || can(user, "manage_users");
@@ -151,6 +154,7 @@ function CustomerDialog({
         id_passport: idp,
       });
       setOk(f(t, "saved", "Saved"));
+      toast.success(f(t, "customer_updated", "Customer updated."));
       onChange();
     } catch (e: any) {
       setErr(t(e?.key || "error"));
@@ -167,8 +171,9 @@ function CustomerDialog({
       loadRentals();
       onChange();
       setOk(f(t, "saved", "Saved"));
+      toast.success(f(t, "reassigned_ok", "Rental reassigned."));
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setReassignBusy(false);
     }
@@ -178,10 +183,11 @@ function CustomerDialog({
     if (!confirm(`${t("delete_btn")}: ${customer.full_name}?`)) return;
     try {
       await apiDel(`/api/customers/${customer.customer_id}`, { confirm: true });
+      toast.success(f(t, "customer_deleted", "Customer deleted."));
       onChange();
       onClose();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     }
   }
 
@@ -317,6 +323,7 @@ function CustomerDialog({
 // switch + a Download-PDF button. No window.open — renders inside a Modal.
 function InvoiceViewer({ req }: { req: InvoiceRequest }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [langs, setLangs] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<string>(req.lang);
   const [html, setHtml] = useState<string>("");
@@ -362,7 +369,7 @@ function InvoiceViewer({ req }: { req: InvoiceRequest }) {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
     } finally {
       setDownloading(false);
     }
@@ -410,13 +417,177 @@ function InvoiceViewer({ req }: { req: InvoiceRequest }) {
   );
 }
 
+interface ActiveRentalLite {
+  deal_id: string;
+  client_name: string;
+  make_model: string;
+  license_plate: string;
+  start_dt: string;
+  end_dt: string;
+}
+
+// Batch office-invoice print: lists active rentals grouped by month with a checkbox
+// each (all on by default), then opens ONE printable document holding a single office
+// copy per selected rental (the backend splices them, one A4 page each).
+function InvoicePrintModal({ onClose }: { onClose: () => void }) {
+  const { t, lang } = useI18n();
+  const toast = useToast();
+  const [rentals, setRentals] = useState<ActiveRentalLite[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    apiGet<ActiveRentalLite[]>("/api/rentals/active")
+      .then((rows) => {
+        setRentals(rows);
+        setSelected(new Set(rows.map((r) => r.deal_id))); // default: all selected
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Group by the start date's month (YYYY-MM), newest month first.
+  const groups = useMemo(() => {
+    const m = new Map<string, ActiveRentalLite[]>();
+    for (const r of rentals) {
+      const key = (r.start_dt || "").slice(0, 7) || "—";
+      const arr = m.get(key);
+      if (arr) arr.push(r);
+      else m.set(key, [r]);
+    }
+    return Array.from(m.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [rentals]);
+
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const allOn = rentals.length > 0 && selected.size === rentals.length;
+  const toggleAll = () =>
+    setSelected(allOn ? new Set() : new Set(rentals.map((r) => r.deal_id)));
+
+  const monthLabel = (ym: string) => {
+    if (ym === "—") return f(t, "no_date", "No date");
+    const [y, mo] = ym.split("-").map(Number);
+    return new Intl.DateTimeFormat(lang || "en", { month: "long", year: "numeric" }).format(
+      new Date(y, mo - 1, 1)
+    );
+  };
+
+  async function print() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setPrinting(true);
+    try {
+      const html = await api<string>("/api/rentals/invoices-batch.html", {
+        method: "POST",
+        body: { deal_ids: ids, lang: lang || "tr" },
+      });
+      const w = window.open("", "_blank");
+      if (w) {
+        w.document.write(html);
+        w.document.close();
+        onClose();
+      } else {
+        toast.error(f(t, "popup_blocked", "Please allow pop-ups to print."));
+      }
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    } finally {
+      setPrinting(false);
+    }
+  }
+
+  return (
+    <Modal title={f(t, "print_active_invoices", "Print Active Invoices")} onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs text-muted">
+            {f(t, "print_invoices_help", "One office copy per selected rental, grouped by month.")}
+          </div>
+          <button
+            className="btn !py-1 !px-2 text-xs shrink-0"
+            onClick={toggleAll}
+            disabled={rentals.length === 0}
+          >
+            {allOn ? f(t, "select_none", "Select none") : f(t, "select_all", "Select all")}
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="text-sm text-muted">{f(t, "loading", "Loading…")}</div>
+        ) : rentals.length === 0 ? (
+          <div className="text-sm text-muted">{f(t, "no_active_rentals", "No active rentals.")}</div>
+        ) : (
+          <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+            {groups.map(([ym, list]) => (
+              <div key={ym} className="space-y-1">
+                <div className="text-xs font-semibold text-muted pt-1">
+                  {monthLabel(ym)} ({list.length})
+                </div>
+                {list.map((r) => (
+                  <label
+                    key={r.deal_id}
+                    className="flex items-center gap-2.5 text-sm cursor-pointer rounded-lg px-2 py-1.5 hover:bg-[rgba(17,24,39,0.04)]"
+                  >
+                    <input
+                      type="checkbox"
+                      className="w-auto"
+                      checked={selected.has(r.deal_id)}
+                      onChange={() => toggle(r.deal_id)}
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium text-ink">{r.client_name}</span>
+                      <span className="text-muted">
+                        {" "}
+                        · {r.make_model} · {r.license_plate || "—"}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          className="btn btn-primary w-full"
+          onClick={print}
+          disabled={printing || selected.size === 0}
+        >
+          <span className="msr text-[18px]">print</span>
+          {printing ? "…" : `${f(t, "print_selected", "Print selected")} (${selected.size})`}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function CustomersPage() {
   const { t, lang } = useI18n();
   const { user } = useAuth();
+  const toast = useToast();
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<CustomerRow | null>(null);
   const [invoice, setInvoice] = useState<InvoiceRequest | null>(null);
+  const [invoicePrint, setInvoicePrint] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [view, setView] = useState<ViewMode>("cards");
+
+  // Remember the chosen view across visits.
+  useEffect(() => {
+    const v = localStorage.getItem("customers_view");
+    if (v === "cards" || v === "table") setView(v);
+  }, []);
+  const changeView = (v: ViewMode) => {
+    setView(v);
+    localStorage.setItem("customers_view", v);
+  };
 
   // Quick-find dropdown (independent search box + selected customer id).
   const [pick, setPick] = useState("");
@@ -467,17 +638,79 @@ export default function CustomersPage() {
     if (!confirm(`${t("delete_btn")}: ${c.full_name}?`)) return;
     try {
       await apiDel(`/api/customers/${c.customer_id}`, { confirm: true });
+      toast.success(f(t, "customer_deleted", "Customer deleted."));
       load();
     } catch (e: any) {
-      alert(t(e?.key || "error"));
+      toast.error(t(e?.key || "error"));
+    }
+  }
+
+  async function downloadReport(url: string, name: string) {
+    setReportBusy(true);
+    try {
+      const res = (await api(url, { raw: true })) as Response;
+      if (!res.ok) throw { key: "error" };
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(objUrl);
+      toast.success(f(t, "report_downloaded", "Report downloaded."));
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    } finally {
+      setReportBusy(false);
     }
   }
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-2">
-        <span className="msr text-[22px]">group</span>
-        <h1 className="text-xl font-bold">{t("nav_customers")}</h1>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="msr text-[22px]">group</span>
+          <h1 className="text-xl font-bold">{t("nav_customers")}</h1>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <ViewToggle
+            value={view}
+            onChange={changeView}
+            cardsTitle={f(t, "view_cards", "Card view")}
+            tableTitle={f(t, "view_table", "Table view")}
+          />
+          <button
+            className="btn !py-1.5 text-xs"
+            onClick={() =>
+              downloadReport(
+                `/api/reports/customers-timeline.pdf?lang=${encodeURIComponent(lang || "tr")}`,
+                "customers-timeline.pdf"
+              )
+            }
+            disabled={reportBusy}
+            title={f(t, "report_pdf_hint", "Customer rental timeline (PDF)")}
+          >
+            <span className="msr text-[16px]">picture_as_pdf</span>
+            {f(t, "report_pdf", "Report (PDF)")}
+          </button>
+          <button
+            className="btn !py-1.5 text-xs"
+            onClick={() => downloadReport("/api/reports/customers.csv", "customers-report.csv")}
+            disabled={reportBusy}
+            title={f(t, "report_csv_hint", "Customers + car metadata (CSV)")}
+          >
+            <span className="msr text-[16px]">table_view</span>
+            {f(t, "report_csv", "Report (CSV)")}
+          </button>
+          <button
+            className="btn btn-primary !py-1.5 text-xs"
+            onClick={() => setInvoicePrint(true)}
+            title={f(t, "print_active_invoices_hint", "Batch-print office invoices for active rentals")}
+          >
+            <span className="msr text-[16px]">print</span>
+            {f(t, "print_active_invoices", "Print Active Invoices")}
+          </button>
+        </div>
       </div>
 
       <input
@@ -515,44 +748,109 @@ export default function CustomersPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {rows.map((c) => (
-          <div key={c.customer_id} className="card p-4 space-y-3">
-            <div className="min-w-0">
-              <div className="font-semibold text-ink truncate">{c.full_name}</div>
-              <div className="text-xs text-muted flex items-center gap-1 mt-0.5">
-                <span className="msr text-[14px]">call</span>
-                {c.phone || "—"}
+      {view === "cards" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {rows.map((c) => (
+            <div key={c.customer_id} className="card p-4 space-y-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-ink truncate">{c.full_name}</div>
+                <div className="text-xs text-muted flex items-center gap-1 mt-0.5">
+                  <span className="msr text-[14px]">call</span>
+                  {c.phone || "—"}
+                </div>
               </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-1 text-muted truncate">
+                  <span className="msr text-[14px]">directions_car</span>
+                  {c.last_make_model || "—"} · {c.last_plate || "—"}
+                </div>
+                <div className="flex items-center gap-1 text-muted">
+                  <span className="msr text-[14px]">payments</span>
+                  {formatEur(c.last_daily_rate)}/{f(t, "day", "day")} · {c.rental_count}
+                </div>
+                <div className="flex items-center gap-1 text-muted">
+                  <span className="msr text-[14px]">event</span>
+                  {f(t, "last_rental", "Last Rental")}: {fmtDate(c.last_rental_date, lang)}
+                </div>
+                <div className="flex items-center gap-1 text-muted truncate">
+                  <span className="msr text-[14px]">person</span>
+                  {f(t, "registered_by", "Registered By")}: {c.registered_by || "—"}
+                </div>
+              </div>
+              <button className="btn w-full !py-1.5 text-xs" onClick={() => setOpen(c)}>
+                <span className="msr text-[16px]">open_in_new</span>
+                {f(t, "open", "Open")}
+              </button>
             </div>
-            <div className="space-y-1.5 text-xs">
-              <div className="flex items-center gap-1 text-muted truncate">
-                <span className="msr text-[14px]">directions_car</span>
-                {c.last_make_model || "—"} · {c.last_plate || "—"}
-              </div>
-              <div className="flex items-center gap-1 text-muted">
-                <span className="msr text-[14px]">payments</span>
-                {formatEur(c.last_daily_rate)}/{f(t, "day", "day")} · {c.rental_count}
-              </div>
-              <div className="flex items-center gap-1 text-muted">
-                <span className="msr text-[14px]">event</span>
-                {f(t, "last_rental", "Last Rental")}: {fmtDate(c.last_rental_date, lang)}
-              </div>
-              <div className="flex items-center gap-1 text-muted truncate">
-                <span className="msr text-[14px]">person</span>
-                {f(t, "registered_by", "Registered By")}: {c.registered_by || "—"}
-              </div>
-            </div>
-            <button className="btn w-full !py-1.5 text-xs" onClick={() => setOpen(c)}>
-              <span className="msr text-[16px]">open_in_new</span>
-              {f(t, "open", "Open")}
-            </button>
-          </div>
-        ))}
-        {rows.length === 0 && (
-          <div className="text-sm text-muted">{f(t, "no_customers", "No customers found.")}</div>
-        )}
-      </div>
+          ))}
+          {rows.length === 0 && (
+            <div className="text-sm text-muted">{f(t, "no_customers", "No customers found.")}</div>
+          )}
+        </div>
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-muted border-b border-line">
+                <th className="p-2.5 font-medium">{t("client_name")}</th>
+                <th className="p-2.5 font-medium">{t("client_phone")}</th>
+                <th className="p-2.5 font-medium">{f(t, "last_vehicle", "Last vehicle")}</th>
+                <th className="p-2.5 font-medium text-right">{f(t, "rentals", "Rentals")}</th>
+                <th className="p-2.5 font-medium">{f(t, "last_rental", "Last Rental")}</th>
+                <th className="p-2.5 font-medium">{f(t, "registered_by", "Registered By")}</th>
+                <th className="p-2.5 font-medium text-right">{f(t, "col_actions", "Actions")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => (
+                <tr key={c.customer_id} className="border-b border-line last:border-0">
+                  <td className="p-2.5">
+                    <span className="font-medium text-ink">{c.full_name}</span>
+                    {(c.active_count ?? 0) > 0 && (
+                      <span className="badge badge-info ml-2">{c.active_count}</span>
+                    )}
+                  </td>
+                  <td className="p-2.5 text-muted">{c.phone || "—"}</td>
+                  <td className="p-2.5 text-muted">
+                    {c.last_make_model || "—"} · {c.last_plate || "—"}
+                  </td>
+                  <td className="p-2.5 text-right text-muted">{c.rental_count}</td>
+                  <td className="p-2.5 text-muted whitespace-nowrap">{fmtDate(c.last_rental_date, lang)}</td>
+                  <td className="p-2.5 text-muted">{c.registered_by || "—"}</td>
+                  <td className="p-2.5">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        className="btn !py-1.5 !px-3 text-xs"
+                        onClick={() => setOpen(c)}
+                        title={f(t, "open", "Open")}
+                      >
+                        <span className="msr text-[16px]">open_in_new</span>
+                        {f(t, "open", "Open")}
+                      </button>
+                      {canDeleteCustomer && (
+                        <button
+                          className="btn btn-danger !py-1.5 !px-2 text-xs"
+                          onClick={() => deleteCustomer(c)}
+                          title={f(t, "delete_customer", "Delete Customer")}
+                        >
+                          <span className="msr text-[16px]">delete</span>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-4 text-sm text-muted text-center">
+                    {f(t, "no_customers", "No customers found.")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Inactive customers (no current active rental) */}
       <section className="space-y-2 border-t border-line pt-4">
@@ -618,6 +916,8 @@ export default function CustomersPage() {
           <InvoiceViewer req={invoice} />
         </Modal>
       )}
+
+      {invoicePrint && <InvoicePrintModal onClose={() => setInvoicePrint(false)} />}
     </div>
   );
 }

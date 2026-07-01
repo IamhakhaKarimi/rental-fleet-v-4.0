@@ -135,6 +135,7 @@ _THEME_KEYS = {
     "font": "theme_font", "primary": "theme_primary", "secondary": "theme_secondary",
     "success": "theme_success", "warning": "theme_warning", "alert": "theme_alert",
     "disabled": "theme_disabled", "bg": "theme_bg",
+    "bar_gradient_start": "theme_bar_gradient_start", "bar_gradient_end": "theme_bar_gradient_end",
 }
 
 

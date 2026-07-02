@@ -144,7 +144,19 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
             return f'<span class="ql-btn ql-btn-info">{inner}</span>'
 
         def _card(q: dict) -> str:
-            btns = "".join(_qr_btn(a) for a in (q.get("actions") or []))
+            acts = list(q.get("actions") or [])
+            # Call + WhatsApp share a single row (both driven by the same phone);
+            # the remaining actions each stay on their own full-width row.
+            call = next((a for a in acts if a.get("key") == "call"), None)
+            wa = next((a for a in acts if a.get("key") == "whatsapp"), None)
+            parts: list[str] = []
+            if call and wa:
+                parts.append(f'<div class="ql-btn-row">{_qr_btn(call)}{_qr_btn(wa)}</div>')
+            for a in acts:
+                if a is call or a is wa:
+                    continue
+                parts.append(_qr_btn(a))
+            btns = "".join(parts)
             btns_block = f'<div class="ql-btns">{btns}</div>' if btns else ""
             return (f'<div class="ql-card">'
                     f'<img class="ql-qr" src="{invoice_links.qr_data_uri(q["payload"], scale=5)}" alt=""/>'
@@ -279,6 +291,8 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
   /* Per-QR tappable action buttons (call / WhatsApp / map / IBAN): each guides the
      reader to one task straight from the invoice, no scan required. */
   .ql-btns {{ display:flex; flex-direction:column; gap:4px; width:100%; margin-top:6px; }}
+  .ql-btn-row {{ display:flex; gap:4px; width:100%; }}
+  .ql-btn-row > .ql-btn {{ flex:1 1 0; min-width:0; }}
   .ql-btn {{ display:flex; flex-direction:column; align-items:flex-start; gap:0;
              padding:4px 8px; border:1px solid #211C17; border-radius:7px;
              text-decoration:none; color:#211C17; break-inside:avoid; }}

@@ -47,6 +47,16 @@
 
   --font-display: var(--font-jakarta), "Plus Jakarta Sans", system-ui, sans-serif;
   --font-body: var(--font-jakarta), "Plus Jakarta Sans", system-ui, sans-serif;
+
+  /* Monthly Finance dashboard — pastel KPI-card tones + trend-badge colours.
+     Kept SEPARATE from the app's monochrome --ok/--danger status tokens (same
+     precedent as --cal-warn above): these are true brand colours for a fintech-
+     style stat card, not status semantics, so they stay legible in both modes. */
+  --fin-purple-bg: #EFE9FB; --fin-purple-ink: #7C3AED;
+  --fin-pink-bg:   #FCEAEA; --fin-pink-ink:   #DC2626;
+  --fin-blue-bg:   #E8F1FC; --fin-blue-ink:   #2563EB;
+  --fin-up-ink:    #15803D;
+  --fin-chart-income: #2F5FD6; --fin-chart-cost: #AFCBF2;
 }
 
 /* Night mode (per-session toggle). Mirrors theme.resolve_theme's _DARK merge +
@@ -79,6 +89,14 @@
 
   --neo-light: #2b2c30;
   --neo-dark: #141517;
+
+  /* Monthly Finance dashboard — desaturated/lightened for a dark canvas (same
+     recipe as --cal-warn's night-mode override: brighter ink, translucent bg). */
+  --fin-purple-bg: rgba(124, 58, 237, 0.16); --fin-purple-ink: #C4B5FD;
+  --fin-pink-bg:   rgba(220, 38, 38, 0.16);  --fin-pink-ink:   #FCA5A5;
+  --fin-blue-bg:   rgba(37, 99, 235, 0.18);  --fin-blue-ink:   #93C5FD;
+  --fin-up-ink:    #4ADE80;
+  --fin-chart-income: #6C93E8; --fin-chart-cost: #35405C;
 }
 
 html, body {
@@ -208,6 +226,90 @@ h1, h2, h3, h4, h5, h6 {
   .badge-archived { color: var(--archived); background: color-mix(in oklab, var(--archived) 18%, transparent); }
 
   /* ======================================================================
+     Monthly Finance dashboard — pastel KPI stat cards + trend badges +
+     "Report Statistic" chart-card chrome (Finance -> Monthly tab).
+     ====================================================================== */
+  .fin-greeting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .fin-stat {
+    border-radius: 18px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 108px;
+    /* Tone (background/icon colour) is applied inline via CSS vars from
+       finance/page.tsx's TONE map — a `-purple`/`-pink`/`-blue` class suffix here
+       gets silently stripped from the compiled stylesheet (observed with this
+       toolchain), since those match Tailwind's default palette colour names. */
+  }
+  .fin-stat-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .fin-stat-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.65);
+    flex-shrink: 0;
+  }
+  :root.dark .fin-stat-icon { background: rgba(255, 255, 255, 0.12); }
+  .fin-stat-label {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .fin-stat-value {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.5rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .fin-trend {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .fin-trend-up   { color: var(--fin-up-ink); background: color-mix(in oklab, var(--fin-up-ink) 16%, transparent); }
+  .fin-trend-down { color: var(--danger);     background: color-mix(in oklab, var(--danger) 14%, transparent); }
+  .fin-legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .fin-period-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: var(--muted);
+    background: color-mix(in oklab, var(--text) 6%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 12px 5px 10px;
+    white-space: nowrap;
+  }
+
+  /* ======================================================================
      NEOMORPHIC occupancy timeline (the calendar). Soft raised panel + bars.
      ====================================================================== */
   .neo-panel {
@@ -259,6 +361,197 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: 5px 5px 12px var(--neo-dark), -5px -5px 12px var(--neo-light);
     border-left: 4px solid var(--hl, var(--accent));
     padding: 14px 16px;
+  }
+
+  /* ======================================================================
+     "Swipe Rentals" card — monochrome header band + labelled body, paged via
+     the SwipeDeck (components/SwipeCard.tsx). Everything themes off the app
+     tokens, so it follows night mode + any super-admin recolour.
+     ====================================================================== */
+  .swipe-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+  }
+  .swipe-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.1);
+  }
+  .swipe-band {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .swipe-avatar {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: "Space Grotesk", var(--font-display);
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .swipe-name {
+    font-family: "Space Grotesk", var(--font-display);
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: 0.2px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .swipe-ref {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 500;
+    font-size: 10.5px;
+    color: var(--muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .swipe-chip {
+    margin-left: auto;
+    flex: none;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 10.5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--text) 8%, transparent);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .swipe-body {
+    padding: 15px 18px 16px;
+  }
+
+  /* Horizontal drag-scroll strip (SwipeDeck). Grab cursor for mouse; during an
+     active pointer drag suppress text selection. Touch uses native scrolling. */
+  .swipe-strip {
+    cursor: grab;
+  }
+  .swipe-strip.is-dragging {
+    cursor: grabbing;
+    user-select: none;
+    /* Free-drag: mandatory snap would fight the direct scrollLeft writes; it
+       re-engages on release and settles to the nearest card. */
+    scroll-snap-type: none;
+  }
+
+  /* Deck side nav (sm+) — circular prev/next straddling the stage edges. */
+  .swipe-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 20;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    place-items: center;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.12);
+    cursor: pointer;
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .swipe-nav.left {
+    left: -15px;
+  }
+  .swipe-nav.right {
+    right: -15px;
+  }
+  .swipe-nav:hover:not(:disabled) {
+    background: var(--bg);
+    transform: translateY(-50%) scale(1.05);
+  }
+  .swipe-nav:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* Inline prev/next used inside the numbered bar on mobile. */
+  .swipe-nav-inline {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .swipe-nav-inline:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  /* Numbered pagination pills. Active = filled accent (app branding). */
+  .swipe-pg {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border-radius: 9px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--surface);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .swipe-pg:hover {
+    color: var(--text);
+    background: var(--bg);
+  }
+  .swipe-pg.is-active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .swipe-pg-gap {
+    min-width: 20px;
+    text-align: center;
+    color: var(--muted);
+    user-select: none;
+  }
+  .swipe-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 5px;
+  }
+  .swipe-val {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .swipe-val-mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 500;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .swipe-panel {
+    padding: 11px 13px;
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    border-radius: 11px;
   }
 
   /* Visitor hero ----------------------------------------------------------- */

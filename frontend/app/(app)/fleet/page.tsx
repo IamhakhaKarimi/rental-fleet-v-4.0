@@ -9,6 +9,7 @@ import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
+import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
 import type { Vehicle } from "@/lib/types";
 
 type V = Vehicle & { locked?: boolean };
@@ -380,40 +381,59 @@ export default function FleetPage() {
       </p>
 
       {view === "cards" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {vehicles.map((v) => (
-            <div key={v.vehicle_id} className="card p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-semibold text-ink truncate">{v.make_model}</div>
-                  <div className="text-xs text-muted">
-                    {v.year || "—"} · {v.vehicle_id}
+        <SwipeDeck
+          items={vehicles}
+          keyOf={(v) => v.vehicle_id}
+          empty={<div className="text-sm text-muted">{t("no_cars")}</div>}
+          render={(v) => (
+            <SwipeCard
+              name={v.make_model}
+              reference={`${v.year || "—"} · ${v.vehicle_id}`}
+              chip={v.license_plate || "—"}
+              chipTitle={tf("col_plate", "Plate")}
+            >
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <SwipeField label={tf("col_status", "Status")}>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <StatusBadge status={v.status} />
+                    {v.locked && (
+                      <span className="badge badge-warn">
+                        <span className="msr text-[13px]">lock</span>
+                        {tf("status_locked_rented", "Rented")}
+                      </span>
+                    )}
                   </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="font-display font-bold text-accent">{formatEur(v.base_daily_rate)}</div>
-                  <div className="text-[0.6rem] uppercase text-muted tracking-wide">/ day</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <StatusBadge status={v.status} />
-                {v.locked && (
-                  <span className="badge badge-warn">
-                    <span className="msr text-[13px]">lock</span>
-                    {t("status_locked_rented") === "status_locked_rented" ? "Rented" : ""}
-                  </span>
-                )}
-                <span className="text-xs text-muted ml-auto flex items-center gap-1">
-                  <span className="msr text-[14px]">pin_drop</span>
-                  {v.license_plate || "—"}
-                </span>
+                </SwipeField>
+                <SwipeField label={tf("col_color", "Color")}>
+                  <div className="swipe-val">
+                    {v.color || "—"}
+                    {v.mileage != null && (
+                      <span className="text-muted font-normal">
+                        {" · "}
+                        {v.mileage.toLocaleString()} km
+                      </span>
+                    )}
+                  </div>
+                </SwipeField>
               </div>
 
-              {(canEdit || canFleet) && <div className="pt-1">{renderActions(v)}</div>}
-            </div>
-          ))}
-          {vehicles.length === 0 && <div className="text-sm text-muted">{t("no_cars")}</div>}
-        </div>
+              <div className="mt-3">
+                <SwipePanel>
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-display font-bold text-lg text-accent">
+                      {formatEur(v.base_daily_rate)}
+                    </span>
+                    <span className="text-[0.6rem] uppercase text-muted tracking-wide">
+                      / {tf("day", "day")}
+                    </span>
+                  </div>
+                </SwipePanel>
+              </div>
+
+              {(canEdit || canFleet) && <div className="mt-3">{renderActions(v)}</div>}
+            </SwipeCard>
+          )}
+        />
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">

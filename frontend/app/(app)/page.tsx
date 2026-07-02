@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
@@ -10,6 +10,7 @@ import { NightModeToggle } from "@/components/NightModeToggle";
 import { Modal } from "@/components/Modal";
 import { BookingDialog } from "@/components/BookingDialog";
 import { StatusBadge } from "@/components/StatusBadge";
+import { SwipeDeck } from "@/components/SwipeCard";
 import { VisitorHome } from "@/components/VisitorHome";
 import type { FleetCounts, Vehicle } from "@/lib/types";
 
@@ -94,37 +95,8 @@ export default function DashboardPage() {
   const roleLabel = user ? t(user.role_label_key) : "";
   const canBook = can(user, "create_reservation");
 
-  // Availability carousel (shown once a date window is picked): a horizontally
-  // swipeable strip of the free cars with prev/next buttons that wrap around —
-  // paging past the last card loops back to the first, and vice versa.
-  const carRef = useRef<HTMLDivElement>(null);
-  const [carIdx, setCarIdx] = useState(0);
-  const scrollToCar = (i: number) => {
-    const el = carRef.current?.children[i] as HTMLElement | undefined;
-    el?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
-  };
-  const goCar = (dir: number) => {
-    const n = shownCars.length;
-    if (!n) return;
-    const next = (carIdx + dir + n) % n; // wrap-around → infinite paging
-    setCarIdx(next);
-    scrollToCar(next);
-  };
-  // Keep the index synced with manual swipes so the buttons resume from the card
-  // currently in view.
-  const onCarScroll = () => {
-    const track = carRef.current;
-    if (!track || track.children.length === 0) return;
-    const first = track.children[0] as HTMLElement;
-    const step = first.offsetWidth + 12; // card width + gap-3 (0.75rem)
-    setCarIdx(Math.round(track.scrollLeft / step));
-  };
-  // Reset to the first card whenever the free-car set changes (new date window).
-  useEffect(() => {
-    setCarIdx(0);
-    carRef.current?.scrollTo({ left: 0 });
-  }, [freeIds, startDate, endDate]);
-
+  // Availability cards use the shared SwipeDeck (drag + seamless loop) once a date
+  // window is picked; see the `startDate` branch below.
   const renderCarCard = (v: Vehicle) => (
     <>
       <div className="h-[120px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted">
@@ -360,46 +332,16 @@ export default function DashboardPage() {
         {shownCars.length === 0 ? (
           <div className="text-sm text-muted">{t("no_cars")}</div>
         ) : startDate ? (
-          /* Dates picked → swipeable availability carousel with wrap-around paging. */
-          <div className="relative">
-            <div
-              ref={carRef}
-              onScroll={onCarScroll}
-              className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            >
-              {shownCars.map((v) => (
-                <div
-                  key={v.vehicle_id}
-                  className="card p-3 space-y-2 snap-start shrink-0 w-[260px] sm:w-[280px]"
-                >
-                  {renderCarCard(v)}
-                </div>
-              ))}
-            </div>
-            {shownCars.length > 1 && (
-              <div className="flex items-center justify-center gap-3 mt-2">
-                <button
-                  className="btn !p-2"
-                  onClick={() => goCar(-1)}
-                  aria-label={tf("prev", "Previous")}
-                  title={tf("prev", "Previous")}
-                >
-                  <span className="msr text-[18px]">chevron_left</span>
-                </button>
-                <span className="text-xs text-muted tabular-nums select-none">
-                  {Math.min(carIdx + 1, shownCars.length)} / {shownCars.length}
-                </span>
-                <button
-                  className="btn !p-2"
-                  onClick={() => goCar(1)}
-                  aria-label={tf("next", "Next")}
-                  title={tf("next", "Next")}
-                >
-                  <span className="msr text-[18px]">chevron_right</span>
-                </button>
-              </div>
-            )}
-          </div>
+          /* Dates picked → shared swipe deck (drag + seamless loop). */
+          <SwipeDeck
+            items={shownCars}
+            keyOf={(v) => v.vehicle_id}
+            render={(v) => renderCarCard(v)}
+            cardClassName="card p-3 space-y-2"
+            itemWidth="w-[260px] sm:w-[280px]"
+            gap={12}
+            empty={<div className="text-sm text-muted">{t("no_cars")}</div>}
+          />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {shownCars.map((v) => (

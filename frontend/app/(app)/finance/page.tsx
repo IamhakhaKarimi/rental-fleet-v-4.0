@@ -1,20 +1,9 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Legend,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { api, apiDel, apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { useT } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
@@ -85,28 +74,26 @@ const COST_TYPES = [
   "other",
 ] as const;
 
-// Hardcoded hex (canvas can't read CSS vars).
-const INCOME_HEX = "#1A1C1E";
-const COST_HEX = "#DC2626";
-const PIE_PALETTE = [
-  "#1A1C1E",
-  "#3F3F46",
-  "#52525B",
-  "#71717A",
-  "#9CA3AF",
-  "#B45309",
-  "#0E7490",
-  "#4D7C0F",
-  "#7C3AED",
-  "#BE185D",
-];
+// Charts are recharts (3.x), which crashes SSR — load them client-only so the
+// server never evaluates recharts. See components/FinanceCharts.tsx.
+const ChartSkeleton = () => (
+  <div className="h-[300px] grid place-items-center text-sm text-muted">…</div>
+);
+const IncomeCostBarChart = dynamic(
+  () => import("@/components/FinanceCharts").then((m) => m.IncomeCostBarChart),
+  { ssr: false, loading: ChartSkeleton }
+);
+const IncomeSharePieChart = dynamic(
+  () => import("@/components/FinanceCharts").then((m) => m.IncomeSharePieChart),
+  { ssr: false, loading: ChartSkeleton }
+);
 
 const cents = (euros: number) => euros / 100;
 
 type TabKey = "overview" | "monthly" | "yearly" | "vehicle" | "customer" | "costs";
 
 export default function FinancePage() {
-  const t = useT();
+  const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
   // t() returns the key itself when missing — keep the Fleet-page fallback idiom.
@@ -317,10 +304,16 @@ export default function FinancePage() {
         />
       )}
       {tab === "monthly" && (
-        <PnlTab rows={monthly} tx={tx} kind="month" reportButtons={<ReportButtons slug="monthly" />} />
+        <MonthlyDashboard
+          rows={monthly}
+          tx={tx}
+          lang={lang}
+          userName={user?.full_name || ""}
+          reportButtons={<ReportButtons slug="monthly" />}
+        />
       )}
       {tab === "yearly" && (
-        <PnlTab rows={yearly} tx={tx} kind="year" reportButtons={<ReportButtons slug="yearly" />} />
+        <PnlTab rows={yearly} tx={tx} reportButtons={<ReportButtons slug="yearly" />} />
       )}
       {tab === "vehicle" && (
         <VehicleTab rows={byVehicle} tx={tx} reportButtons={<ReportButtons slug="by_vehicle" />} />
@@ -373,10 +366,6 @@ function EmptyRow({ cols, label }: { cols: number; label: string }) {
     </tr>
   );
 }
-function ChartTooltipFmt(value: any) {
-  return formatEur(Math.round(Number(value) * 100));
-}
-
 /* ── Overview ───────────────────────────────────────────────────────────────── */
 function OverviewTab({
   revenue,
@@ -463,16 +452,78 @@ function OverviewTab({
   );
 }
 
-/* ── Monthly / Yearly P&L ───────────────────────────────────────────────────── */
+/* ── Shared P&L totals + table (Monthly dashboard and the Yearly tab both use
+   this table below their respective chart) ─────────────────────────────────── */
+function pnlTotals(rows: PnlRow[]) {
+  return rows.reduce(
+    (a, r) => ({ income: a.income + r.income, cost: a.cost + r.cost, net: a.net + r.net }),
+    { income: 0, cost: 0, net: 0 }
+  );
+}
+
+function PnlTable({
+  rows,
+  tx,
+  periodLabel,
+}: {
+  rows: PnlRow[];
+  tx: (k: string, f: string) => string;
+  periodLabel: string;
+}) {
+  const totals = useMemo(() => pnlTotals(rows), [rows]);
+  return (
+    <div className="card p-5 overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-line">
+            <Th>{periodLabel}</Th>
+            <Th right>{tx("col_income", "Income")}</Th>
+            <Th right>{tx("col_cost", "Cost")}</Th>
+            <Th right>{tx("col_net", "Net")}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow cols={4} label={tx("no_data", "No data yet.")} />}
+          {rows.map((r) => (
+            <tr key={r.period} className="border-b border-line last:border-0">
+              <Td>{r.period}</Td>
+              <Td right>{formatEur(r.income)}</Td>
+              <Td right>{formatEur(r.cost)}</Td>
+              <Td right bold>
+                <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{formatEur(r.net)}</span>
+              </Td>
+            </tr>
+          ))}
+          {rows.length > 0 && (
+            <tr className="border-t-2 border-line">
+              <Td bold>{tx("fin_totals", "Total")}</Td>
+              <Td right bold>
+                {formatEur(totals.income)}
+              </Td>
+              <Td right bold>
+                {formatEur(totals.cost)}
+              </Td>
+              <Td right bold>
+                <span className={totals.net >= 0 ? "text-accent" : "text-danger"}>
+                  {formatEur(totals.net)}
+                </span>
+              </Td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── Yearly P&L ──────────────────────────────────────────────────────────────── */
 function PnlTab({
   rows,
   tx,
-  kind,
   reportButtons,
 }: {
   rows: PnlRow[];
   tx: (k: string, f: string) => string;
-  kind: "month" | "year";
   reportButtons: React.ReactNode;
 }) {
   const data = useMemo(
@@ -485,86 +536,212 @@ function PnlTab({
       })),
     [rows]
   );
-  const totals = useMemo(
-    () =>
-      rows.reduce(
-        (a, r) => ({ income: a.income + r.income, cost: a.cost + r.cost, net: a.net + r.net }),
-        { income: 0, cost: 0, net: 0 }
-      ),
-    [rows]
-  );
-  const periodLabel = kind === "month" ? tx("col_period", "Period") : tx("col_year", "Year");
 
   return (
     <div className="space-y-4">
       <div className="card p-5">
         <div className="flex items-center justify-between gap-2 mb-4">
           <h2 className="text-base font-semibold">
-            {kind === "month" ? tx("fin_tab_monthly", "Monthly") : tx("fin_tab_yearly", "Yearly")} ·{" "}
-            {tx("col_income", "Income")} / {tx("col_cost", "Cost")}
+            {tx("fin_tab_yearly", "Yearly")} · {tx("col_income", "Income")} / {tx("col_cost", "Cost")}
           </h2>
           {reportButtons}
         </div>
         {data.length === 0 ? (
           <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
         ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-              <XAxis dataKey="period" tick={{ fontSize: 12 }} stroke="#9CA3AF" />
-              <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" width={48} />
-              <Tooltip
-                formatter={ChartTooltipFmt}
-                contentStyle={{ borderRadius: 10, border: "1px solid #EAE8E3", fontSize: 12 }}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="income" name={tx("col_income", "Income")} fill={INCOME_HEX} radius={[4, 4, 0, 0]} />
-              <Bar dataKey="cost" name={tx("col_cost", "Cost")} fill={COST_HEX} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <IncomeCostBarChart
+            data={data}
+            incomeLabel={tx("col_income", "Income")}
+            costLabel={tx("col_cost", "Cost")}
+          />
         )}
       </div>
 
-      <div className="card p-5 overflow-x-auto">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-line">
-              <Th>{periodLabel}</Th>
-              <Th right>{tx("col_income", "Income")}</Th>
-              <Th right>{tx("col_cost", "Cost")}</Th>
-              <Th right>{tx("col_net", "Net")}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && <EmptyRow cols={4} label={tx("no_data", "No data yet.")} />}
-            {rows.map((r) => (
-              <tr key={r.period} className="border-b border-line last:border-0">
-                <Td>{r.period}</Td>
-                <Td right>{formatEur(r.income)}</Td>
-                <Td right>{formatEur(r.cost)}</Td>
-                <Td right bold>
-                  <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{formatEur(r.net)}</span>
-                </Td>
-              </tr>
-            ))}
-            {rows.length > 0 && (
-              <tr className="border-t-2 border-line">
-                <Td bold>{tx("fin_totals", "Total")}</Td>
-                <Td right bold>
-                  {formatEur(totals.income)}
-                </Td>
-                <Td right bold>
-                  {formatEur(totals.cost)}
-                </Td>
-                <Td right bold>
-                  <span className={totals.net >= 0 ? "text-accent" : "text-danger"}>
-                    {formatEur(totals.net)}
-                  </span>
-                </Td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <PnlTable rows={rows} tx={tx} periodLabel={tx("col_year", "Year")} />
+    </div>
+  );
+}
+
+/* ── Monthly dashboard (fintech-style: greeting, pastel KPI cards with trend
+   badges, "Report Statistic" chart card) ────────────────────────────────────── */
+function trendOf(rows: PnlRow[], key: "income" | "cost" | "net"): { pct: number; up: boolean } | null {
+  if (rows.length < 2) return null;
+  const cur = rows[rows.length - 1][key];
+  const prev = rows[rows.length - 2][key];
+  if (!prev) return null;
+  const pct = Math.round(((cur - prev) / Math.abs(prev)) * 100);
+  return { pct, up: pct >= 0 };
+}
+
+function TrendBadge({
+  trend,
+  goodDirectionUp,
+}: {
+  trend: { pct: number; up: boolean } | null;
+  /** Whether an increase is the desirable direction (income/net: yes; cost: no). */
+  goodDirectionUp: boolean;
+}) {
+  if (!trend) return null;
+  const good = goodDirectionUp ? trend.up : !trend.up;
+  return (
+    <span className={`fin-trend ${good ? "fin-trend-up" : "fin-trend-down"}`}>
+      <span className="msr text-[13px]">{trend.up ? "trending_up" : "trending_down"}</span>
+      {Math.abs(trend.pct)}%
+    </span>
+  );
+}
+
+// Tone -> CSS-var colours, applied inline (see the note on .fin-stat in
+// globals.css for why these aren't plain `fin-stat-purple`-style classes).
+const STAT_TONE = {
+  purple: { bg: "var(--fin-purple-bg)", ink: "var(--fin-purple-ink)" },
+  pink: { bg: "var(--fin-pink-bg)", ink: "var(--fin-pink-ink)" },
+  blue: { bg: "var(--fin-blue-bg)", ink: "var(--fin-blue-ink)" },
+} as const;
+
+function StatCard({
+  tone,
+  icon,
+  label,
+  value,
+  trend,
+  goodDirectionUp,
+}: {
+  tone: keyof typeof STAT_TONE;
+  icon: string;
+  label: string;
+  value: string;
+  trend: { pct: number; up: boolean } | null;
+  goodDirectionUp: boolean;
+}) {
+  const { bg, ink } = STAT_TONE[tone];
+  return (
+    <div className="fin-stat" style={{ background: bg }}>
+      <div className="fin-stat-top">
+        <span className="fin-stat-icon" style={{ color: ink }}>
+          <span className="msr text-[20px]">{icon}</span>
+        </span>
+        <TrendBadge trend={trend} goodDirectionUp={goodDirectionUp} />
       </div>
+      <div>
+        <div className="fin-stat-label">{label}</div>
+        <div className="fin-stat-value">{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function MonthlyDashboard({
+  rows,
+  tx,
+  lang,
+  userName,
+  reportButtons,
+}: {
+  rows: PnlRow[];
+  tx: (k: string, f: string) => string;
+  lang: string;
+  userName: string;
+  reportButtons: React.ReactNode;
+}) {
+  const data = useMemo(
+    () =>
+      rows.map((r) => ({
+        period: r.period,
+        income: cents(r.income),
+        cost: cents(r.cost),
+        net: r.net,
+      })),
+    [rows]
+  );
+  const totals = useMemo(() => pnlTotals(rows), [rows]);
+
+  // "YYYY-MM" -> a short localized month label ("Jul") for the bar chart's x-axis —
+  // the reference design used weekday labels, but the app only has monthly
+  // granularity, so short month names are the honest equivalent at this zoom level.
+  const monthShort = useCallback(
+    (period: string) => {
+      const [y, m] = period.split("-").map(Number);
+      if (!y || !m) return period;
+      return new Intl.DateTimeFormat(lang || "en", { month: "short" }).format(new Date(y, m - 1, 1));
+    },
+    [lang]
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="fin-greeting">
+          <span className="msr text-[20px]">waving_hand</span>
+          {tx("fin_greeting", "Hello")}
+          {userName ? `, ${userName}` : ""}
+        </div>
+        {reportButtons}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <StatCard
+          tone="purple"
+          icon="account_balance_wallet"
+          label={tx("col_income", "Income")}
+          value={formatEur(totals.income)}
+          trend={trendOf(rows, "income")}
+          goodDirectionUp
+        />
+        <StatCard
+          tone="pink"
+          icon="credit_card"
+          label={tx("col_cost", "Cost")}
+          value={formatEur(totals.cost)}
+          trend={trendOf(rows, "cost")}
+          goodDirectionUp={false}
+        />
+        <StatCard
+          tone="blue"
+          icon="account_balance"
+          label={tx("col_net", "Net")}
+          value={formatEur(totals.net)}
+          trend={trendOf(rows, "net")}
+          goodDirectionUp
+        />
+      </div>
+
+      <div className="card p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <h2 className="text-base font-semibold">{tx("fin_report_statistic", "Report Statistic")}</h2>
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-muted">
+              <span className="flex items-center gap-1.5">
+                <span className="fin-legend-dot" style={{ background: "var(--fin-chart-income)" }} />
+                {tx("col_income", "Income")}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="fin-legend-dot" style={{ background: "var(--fin-chart-cost)" }} />
+                {tx("col_cost", "Cost")}
+              </span>
+            </div>
+            <span className="fin-period-pill">
+              <span className="msr text-[15px]">calendar_month</span>
+              {tx("fin_tab_monthly", "Monthly")}
+            </span>
+          </div>
+        </div>
+        {data.length === 0 ? (
+          <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
+        ) : (
+          <IncomeCostBarChart
+            data={data}
+            incomeLabel={tx("col_income", "Income")}
+            costLabel={tx("col_cost", "Cost")}
+            incomeColor="var(--fin-chart-income)"
+            costColor="var(--fin-chart-cost)"
+            xTickFormatter={monthShort}
+            currentLabel={tx("fin_current_period", "Current")}
+          />
+        )}
+      </div>
+
+      <PnlTable rows={rows} tx={tx} periodLabel={tx("col_period", "Period")} />
     </div>
   );
 }
@@ -595,20 +772,7 @@ function VehicleTab({
         {pie.length === 0 ? (
           <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
         ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie data={pie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={false}>
-                {pie.map((_, i) => (
-                  <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                formatter={ChartTooltipFmt}
-                contentStyle={{ borderRadius: 10, border: "1px solid #EAE8E3", fontSize: 12 }}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-            </PieChart>
-          </ResponsiveContainer>
+          <IncomeSharePieChart pie={pie} />
         )}
       </div>
 

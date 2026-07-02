@@ -5,6 +5,8 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { formatEur } from "@/lib/money";
 import { Modal } from "./Modal";
+import { StatusBadge } from "./StatusBadge";
+import { SwipeCard, SwipeField, SwipePanel } from "./SwipeCard";
 
 export interface ActiveRental {
   deal_id: string;
@@ -219,54 +221,57 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
 
   const lbl = "text-xs text-muted block mb-1";
 
-  // A rental that is already underway (its start has been reached) gets a faded
-  // white -> sky-blue header wash so active pickups read differently from upcoming
-  // reservations. Invalid/blank dates fall back to "not started".
-  const started = new Date(r.start_dt.replace(" ", "T")).getTime() <= Date.now();
+  // Days left until the return date (date-only, timezone-safe). Drives the header
+  // chip: "Nd" upcoming, "today" on the due day, "overdue" past it.
+  const now = new Date();
+  const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate()
+  ).padStart(2, "0")}`;
+  const daysLeft = daysBetweenISO(todayISO, r.end_dt.slice(0, 10));
+  const daysChip =
+    daysLeft > 0
+      ? `${daysLeft}${tf("days_left_short", "d")}`
+      : daysLeft === 0
+      ? tf("due_today_short", "today")
+      : tf("overdue_short", "overdue");
 
   return (
-    <div className="card p-4 space-y-3">
-      {/* Header */}
-      <div className={`rounded-[10px] px-4 py-3 ${started ? "client-bar-started" : "bg-[rgba(17,24,39,0.05)]"}`}>
-        <div className={`font-bold ${started ? "cb-name" : "text-ink"}`}>{r.client_name}</div>
-        <div className={`text-xs ${started ? "cb-sub" : "text-muted"}`}>{fmtInvoiceNo(r.deal_id)}</div>
-      </div>
-
-      {/* Info grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-ink">
-            <span className="msr text-[16px] text-muted">call</span>
-            {r.phone || "—"}
-          </div>
-          <div className="flex items-center gap-1.5 text-ink">
-            <span className="msr text-[16px] text-muted">badge</span>
-            {r.id_passport || "—"}
-          </div>
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5 font-medium text-ink">
-            <span className="msr text-[16px] text-muted">directions_car</span>
+    <SwipeCard
+      name={r.client_name}
+      reference={fmtInvoiceNo(r.deal_id)}
+      chip={daysChip}
+      chipTitle={tf("days_left", "Days left")}
+    >
+      {/* Info grid — labelled two-column body */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+        <SwipeField label={tf("contact", "Contact")}>
+          <div className="swipe-val-mono">{r.phone || "—"}</div>
+          <div className="swipe-val-mono mt-1">{r.id_passport || "—"}</div>
+        </SwipeField>
+        <SwipeField label={tf("invoice_vehicle", "Vehicle")}>
+          <div className="swipe-val truncate">
             {r.make_model} · {r.color || "—"}
           </div>
-          <div className="flex items-center gap-1.5 text-ink">
-            <span className="msr text-[16px] text-muted">pin_drop</span>
-            {r.license_plate || "—"}
-          </div>
-        </div>
-        <div className="text-sm">
-          <div className="text-ink">
-            <span className="font-medium">{t("period") === "period" ? "Period" : t("period")}:</span>{" "}
-            {fmtFull(r.start_dt)} → {fmtFull(r.end_dt)}
-          </div>
-          <div className="text-xs text-muted mt-1">
-            {formatEur(r.daily_rate)}/day · {t("days")}: {r.rental_days} · {t("live_total")}:{" "}
-            {formatEur(r.total_amount)} · {t("deposit")}: {formatEur(r.deposit)}
-          </div>
-        </div>
+          <div className="swipe-val-mono mt-1">{r.license_plate || "—"}</div>
+        </SwipeField>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="mt-3">
+        <SwipePanel>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[12px] font-semibold text-ink">
+              {fmtFull(r.start_dt)} → {fmtFull(r.end_dt)}
+            </div>
+            <StatusBadge status={r.status} />
+          </div>
+          <div className="text-[11px] text-muted mt-1.5">
+            {formatEur(r.daily_rate)}/{tf("day", "day")} · {t("days")}: {r.rental_days} ·{" "}
+            {t("live_total")}: {formatEur(r.total_amount)} · {t("deposit")}: {formatEur(r.deposit)}
+          </div>
+        </SwipePanel>
+      </div>
+
+      <div className="flex items-center gap-2 mt-3">
         <button className="btn flex-1" onClick={openLangPicker} title={tf("print_invoice_hint", "Open a printable invoice for this rental")}>
           <span className="msr text-[18px]">receipt_long</span>
           {tf("print_invoice", "Print Invoice")}
@@ -283,6 +288,7 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       </div>
 
       {/* Edit Reservation */}
+      <div className="mt-3 space-y-3">
       <Section icon="edit" title={t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -359,6 +365,7 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
           </button>
         </div>
       </Section>
+      </div>
 
       {/* Print-invoice language picker — choose the client's language, then open
           the printable invoice in that language. */}
@@ -397,6 +404,6 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
           </div>
         </Modal>
       )}
-    </div>
+    </SwipeCard>
   );
 }

@@ -136,16 +136,19 @@ def build_invoice_qrs(deal: dict, business_name: str, T, balance_cents: int,
         # digital reader can act without scanning (each guides to one task).
         contact_actions: list[dict] = []
         if _tel_href(phone):
-            contact_actions.append({"label": T("qa_call"), "value": (phone or "").strip(),
+            contact_actions.append({"key": "call", "label": T("qa_call"),
+                                    "value": (phone or "").strip(),
                                     "href": _tel_href(phone)})
         if _digits(phone):
-            contact_actions.append({"label": T("qr_whatsapp"), "value": "WhatsApp",
+            contact_actions.append({"key": "whatsapp", "label": T("qr_whatsapp"),
+                                    "value": "WhatsApp",
                                     "href": _wa_url(phone, f"{business_name}: {inv_no}")})
         if maps_url or address:
-            contact_actions.append({"label": T("qr_location"), "value": (address or T("qr_location")),
+            contact_actions.append({"key": "location", "label": T("qr_location"),
+                                    "value": (address or T("qr_location")),
                                     "href": _maps_url(maps_url, address)})
         if email:
-            contact_actions.append({"label": "Email", "value": email,
+            contact_actions.append({"key": "email", "label": "Email", "value": email,
                                     "href": f"mailto:{email}"})
         qrs.append({"key": "contact", "label": T("qr_contact"),
                     "caption": T("qr_scan_hint"), "payload": vcard,

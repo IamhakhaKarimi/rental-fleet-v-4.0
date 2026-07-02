@@ -12,6 +12,7 @@ import { BookingDialog } from "@/components/BookingDialog";
 import { ReservationCard, type ActiveRental } from "@/components/ReservationCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
+import { SwipeDeck } from "@/components/SwipeCard";
 
 type TLRange = "week" | "month" | "two_month" | "all_months";
 
@@ -145,15 +146,16 @@ export default function ReservationsPage() {
           </div>
         </div>
         {view === "cards" ? (
-          <div className="space-y-3">
-            {filtered.map((r) => (
-              <ReservationCard key={r.deal_id} rental={r} onChange={load} />
-            ))}
-            {rentals.length === 0 && <div className="text-sm text-muted">{t("timeline_empty")}</div>}
-            {rentals.length > 0 && filtered.length === 0 && (
-              <div className="text-sm text-muted">{tf("no_results", "No matching clients.")}</div>
-            )}
-          </div>
+          <SwipeDeck
+            items={filtered}
+            keyOf={(r) => r.deal_id}
+            empty={
+              <div className="text-sm text-muted">
+                {rentals.length === 0 ? t("timeline_empty") : tf("no_results", "No matching clients.")}
+              </div>
+            }
+            render={(r) => <ReservationCard rental={r} onChange={load} />}
+          />
         ) : (
           <div className="card overflow-x-auto">
             <table className="w-full text-sm">

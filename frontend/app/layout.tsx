@@ -26,6 +26,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&display=block"
         />
+        {/* Swipe-card design fonts: Space Grotesk (names) + IBM Plex Mono (refs, plates, ids). */}
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+        />
         <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
       </head>
       <body>

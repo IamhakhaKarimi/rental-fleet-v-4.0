@@ -9,6 +9,7 @@ import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
+import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
 import type { LanguagesInfo } from "@/lib/types";
 
 // English fallback when a key isn't in the dictionary.
@@ -749,44 +750,56 @@ export default function CustomersPage() {
       </div>
 
       {view === "cards" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {rows.map((c) => (
-            <div key={c.customer_id} className="card p-4 space-y-3">
-              <div className="min-w-0">
-                <div className="font-semibold text-ink truncate">{c.full_name}</div>
-                <div className="text-xs text-muted flex items-center gap-1 mt-0.5">
-                  <span className="msr text-[14px]">call</span>
-                  {c.phone || "—"}
-                </div>
+        <SwipeDeck
+          items={rows}
+          keyOf={(c) => c.customer_id}
+          empty={
+            <div className="text-sm text-muted">{f(t, "no_customers", "No customers found.")}</div>
+          }
+          render={(c) => (
+            <SwipeCard
+              name={c.full_name}
+              reference={c.phone || "—"}
+              chip={
+                (c.active_count ?? 0) > 0
+                  ? `${c.active_count} ${f(t, "active", "active")}`
+                  : `${c.rental_count} ${f(t, "rentals", "rentals")}`
+              }
+              chipTitle={f(t, "rentals", "Rentals")}
+            >
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <SwipeField label={f(t, "last_vehicle", "Last vehicle")}>
+                  <div className="swipe-val truncate">{c.last_make_model || "—"}</div>
+                  <div className="swipe-val-mono mt-0.5">{c.last_plate || "—"}</div>
+                </SwipeField>
+                <SwipeField label={f(t, "last_rate", "Last rate")}>
+                  <div className="swipe-val">
+                    {formatEur(c.last_daily_rate)}
+                    <span className="text-muted font-normal">/{f(t, "day", "day")}</span>
+                  </div>
+                </SwipeField>
               </div>
-              <div className="space-y-1.5 text-xs">
-                <div className="flex items-center gap-1 text-muted truncate">
-                  <span className="msr text-[14px]">directions_car</span>
-                  {c.last_make_model || "—"} · {c.last_plate || "—"}
-                </div>
-                <div className="flex items-center gap-1 text-muted">
-                  <span className="msr text-[14px]">payments</span>
-                  {formatEur(c.last_daily_rate)}/{f(t, "day", "day")} · {c.rental_count}
-                </div>
-                <div className="flex items-center gap-1 text-muted">
-                  <span className="msr text-[14px]">event</span>
-                  {f(t, "last_rental", "Last Rental")}: {fmtDate(c.last_rental_date, lang)}
-                </div>
-                <div className="flex items-center gap-1 text-muted truncate">
-                  <span className="msr text-[14px]">person</span>
-                  {f(t, "registered_by", "Registered By")}: {c.registered_by || "—"}
-                </div>
+
+              <div className="mt-3">
+                <SwipePanel>
+                  <div className="flex items-center gap-1.5 text-[12px] text-ink">
+                    <span className="msr text-[15px] text-muted">event</span>
+                    {f(t, "last_rental", "Last Rental")}: {fmtDate(c.last_rental_date, lang)}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted mt-1 truncate">
+                    <span className="msr text-[14px]">person</span>
+                    {f(t, "registered_by", "Registered By")}: {c.registered_by || "—"}
+                  </div>
+                </SwipePanel>
               </div>
-              <button className="btn w-full !py-1.5 text-xs" onClick={() => setOpen(c)}>
+
+              <button className="btn w-full !py-1.5 text-xs mt-3" onClick={() => setOpen(c)}>
                 <span className="msr text-[16px]">open_in_new</span>
                 {f(t, "open", "Open")}
               </button>
-            </div>
-          ))}
-          {rows.length === 0 && (
-            <div className="text-sm text-muted">{f(t, "no_customers", "No customers found.")}</div>
+            </SwipeCard>
           )}
-        </div>
+        />
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">

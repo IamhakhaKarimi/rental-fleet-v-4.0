@@ -320,21 +320,16 @@ export default function FinancePage() {
       </div>
 
       {/* Tab menu — bento pill bar */}
-      {/* Seven tabs. Below `lg` they become one horizontally-scrollable row
-          rather than wrapping into a four-line block that pushes the content
-          off a phone screen. `.no-scrollbar` already exists in globals.css. */}
-      <div
-        className="bento-in card p-1.5 flex items-center gap-1 flex-wrap
-                   max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:no-scrollbar"
-        style={{ animationDelay: "180ms" }}
-      >
+      {/* Seven tabs. Wraps into a multi-row block on phone/tablet instead of
+          scrolling sideways — a horizontal-scroll row hid tabs off-screen with
+          no visible affordance that there were more. Desktop is unchanged
+          (still one row; there's room for all seven). */}
+      <div className="bento-in card p-1.5 flex items-center gap-1 flex-wrap" style={{ animationDelay: "180ms" }}>
         {tabs.map((tb) => (
           <button
             key={tb.key}
             onClick={() => setTab(tb.key)}
-            className={`seg-btn rounded-lg flex items-center gap-1.5 max-lg:shrink-0 max-lg:whitespace-nowrap ${
-              tab === tb.key ? "active" : ""
-            }`}
+            className={`seg-btn rounded-lg flex items-center gap-1.5 ${tab === tb.key ? "active" : ""}`}
           >
             <span className="msr text-[16px]">{tb.icon}</span>
             {tb.label}

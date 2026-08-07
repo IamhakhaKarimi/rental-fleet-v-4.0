@@ -257,15 +257,11 @@ export function BookingDialog({
   const periodCol = "w-[150px] max-sm:w-full";
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] items-stretch h-full">
-      {/* ── LEFT — step sidebar + the form ──────────────────────────────── */}
-      {/* Column below `lg` so the step rail becomes a strip ABOVE the form
-          rather than stealing 168px of a 375px sheet; row from `lg` as before. */}
-      <div className="flex gap-4 min-w-0 h-full max-lg:flex-col max-lg:gap-2.5">
-        <StepSidebar steps={steps} activeId={activeStep} onSelect={(id) => setActiveStep(id as StepId)} />
+    <div className="flex gap-3 min-w-0 h-full max-lg:flex-col max-lg:gap-2.5">
+      <StepSidebar steps={steps} activeId={activeStep} onSelect={(id) => setActiveStep(id as StepId)} />
 
-        <div className="flex-1 min-w-0 flex flex-col gap-3">
-          <div className="flex-1 min-h-0 space-y-3">
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+          <div className="min-h-0 space-y-2.5">
         {activeStep === "period" && (
         <div className="rounded-xl border border-line bg-[rgba(17,24,39,0.02)] p-3 space-y-2.5">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -461,50 +457,86 @@ export function BookingDialog({
         )}
 
         {activeStep === "review" && (
-          <div className="space-y-2.5 min-w-0">
-            <div className={groupTitle}>
-              <span className="msr text-[15px]">fact_check</span>
-              {tf("review_step", "Review")}
+          <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,340px)] min-w-0">
+            <div className="space-y-2.5 min-w-0">
+              <div className={groupTitle}>
+                <span className="msr text-[15px]">fact_check</span>
+                {tf("review_step", "Review")}
+              </div>
+              <p className="text-[12px] text-muted leading-snug">
+                {tf(
+                  "review_step_hint",
+                  "Check the invoice preview below, then save the rental once every step above is checked off."
+                )}
+              </p>
+              <ul className="space-y-1.5">
+                {steps
+                  .filter((s) => s.id !== "review")
+                  .map((s) => (
+                    <li key={s.id} className="flex items-center gap-2 text-[12.5px]">
+                      <span
+                        className={`msr text-[16px] ${s.complete ? "text-[#16a34a]" : "text-muted"}`}
+                      >
+                        {s.complete ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      {s.label}
+                    </li>
+                  ))}
+              </ul>
             </div>
-            <p className="text-[12px] text-muted leading-snug">
-              {tf(
-                "review_step_hint",
-                "Check the invoice preview on the right, then save the rental once every step above is checked off."
-              )}
-            </p>
-            <ul className="space-y-1.5">
-              {steps
-                .filter((s) => s.id !== "review")
-                .map((s) => (
-                  <li key={s.id} className="flex items-center gap-2 text-[12.5px]">
-                    <span
-                      className={`msr text-[16px] ${s.complete ? "text-[#16a34a]" : "text-muted"}`}
-                    >
-                      {s.complete ? "check_circle" : "radio_button_unchecked"}
-                    </span>
-                    {s.label}
-                  </li>
-                ))}
-            </ul>
+
+            <div className="space-y-2 min-w-0">
+              <div className={groupTitle}>
+                <span className="msr text-[15px]">receipt_long</span>
+                {tf("invoice_preview", "Invoice preview")}
+              </div>
+              <InvoicePreview
+                data={{
+                  businessName: biz?.business_name || "—",
+                  tagline: biz?.tagline,
+                  clientName: name,
+                  phone,
+                  idPassport: idp,
+                  vehicleId,
+                  makeModel: car?.make_model || "",
+                  licensePlate: car?.license_plate || "",
+                  startDate,
+                  startTime,
+                  returnDate,
+                  returnTime,
+                  days,
+                  dailyRateEuros: rate,
+                  depositEuros: deposit,
+                  invoiceLang: lang,
+                  issuedBy: user?.full_name || user?.username || "",
+                }}
+              />
+              <p className="text-[10px] text-muted leading-snug">
+                {tf("invoice_preview_hint", "Live preview — the final PDF is generated on save.")}
+              </p>
+            </div>
           </div>
         )}
           </div>
 
-          {/* Step nav — Back/Next as a convenience on top of the sidebar. */}
+          {/* Step nav — Back/Next as a convenience on top of the sidebar. Label
+              text drops below `sm` so the row never overflows a narrow phone;
+              the icon alone still carries the direction. */}
           <div className="flex items-center justify-between gap-2 shrink-0">
-            <button className="btn !px-2.5" onClick={goBack} disabled={stepIndex === 0}>
+            <button className="btn !px-2.5" onClick={goBack} disabled={stepIndex === 0} title={tf("back", "Back")}>
               <span className="msr text-[16px]">chevron_left</span>
-              {tf("back", "Back")}
+              <span className="max-sm:hidden">{tf("back", "Back")}</span>
             </button>
             {activeStep !== "review" && (
-              <button className="btn !px-2.5" onClick={goNext}>
-                {tf("next", "Next")}
+              <button className="btn !px-2.5" onClick={goNext} title={tf("next", "Next")}>
+                <span className="max-sm:hidden">{tf("next", "Next")}</span>
                 <span className="msr text-[16px]">chevron_right</span>
               </button>
             )}
           </div>
 
-          {/* Footer — running total and the single commit action. */}
+          {/* Footer — running total and the single commit action. Same
+              icon-only-on-phone treatment as the step nav above. */}
           <div className="flex items-center justify-between gap-3 flex-wrap border-t border-line pt-3 shrink-0">
             <div className="flex items-baseline gap-2">
               <span className="text-[11px] font-medium text-muted">{t("live_total")}</span>
@@ -517,49 +549,17 @@ export function BookingDialog({
             </div>
             <div className="flex items-center gap-2">
               {err && <span className="text-xs text-danger">{err}</span>}
-              <button className="btn" onClick={onClose} disabled={busy}>
-                {tf("cancel", "Cancel")}
+              <button className="btn" onClick={onClose} disabled={busy} title={tf("cancel", "Cancel")}>
+                <span className="msr text-[16px] sm:hidden">close</span>
+                <span className="max-sm:hidden">{tf("cancel", "Cancel")}</span>
               </button>
-              <button className="btn btn-primary" onClick={submit} disabled={busy}>
+              <button className="btn btn-primary" onClick={submit} disabled={busy} title={t("register_btn")}>
                 <span className="msr text-[16px]">check</span>
-                {busy ? "…" : t("register_btn")}
+                <span className="max-sm:hidden">{busy ? "…" : t("register_btn")}</span>
               </button>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* ── RIGHT — live invoice preview ────────────────────────────────── */}
-      <div className="hidden lg:block space-y-2">
-        <div className={groupTitle}>
-          <span className="msr text-[15px]">receipt_long</span>
-          {tf("invoice_preview", "Invoice preview")}
-        </div>
-        <InvoicePreview
-          data={{
-            businessName: biz?.business_name || "—",
-            tagline: biz?.tagline,
-            clientName: name,
-            phone,
-            idPassport: idp,
-            vehicleId,
-            makeModel: car?.make_model || "",
-            licensePlate: car?.license_plate || "",
-            startDate,
-            startTime,
-            returnDate,
-            returnTime,
-            days,
-            dailyRateEuros: rate,
-            depositEuros: deposit,
-            invoiceLang: lang,
-            issuedBy: user?.full_name || user?.username || "",
-          }}
-        />
-        <p className="text-[10px] text-muted leading-snug">
-          {tf("invoice_preview_hint", "Live preview — the final PDF is generated on save.")}
-        </p>
-      </div>
     </div>
   );
 }

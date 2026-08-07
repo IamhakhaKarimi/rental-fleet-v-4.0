@@ -116,12 +116,12 @@ export default function ReservationsPage() {
             title={tf("download_timeline", "Download Timeline (PDF)")}
           >
             <span className="msr text-[18px]">picture_as_pdf</span>
-            {tf("download_timeline", "Download Timeline (PDF)")}
+            <span className="max-sm:hidden">{tf("download_timeline", "Download Timeline (PDF)")}</span>
           </button>
           {canBook && (
-            <button className="btn btn-primary" onClick={() => setBooking(true)}>
+            <button className="btn btn-primary" onClick={() => setBooking(true)} title={t("quick_register")}>
               <span className="msr text-[18px]">add</span>
-              {t("quick_register")}
+              <span className="max-sm:hidden">{t("quick_register")}</span>
             </button>
           )}
         </div>

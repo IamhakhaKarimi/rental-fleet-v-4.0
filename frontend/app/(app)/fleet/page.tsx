@@ -465,9 +465,13 @@ export default function FleetPage() {
             tableTitle={tf("view_table", "Table view")}
           />
           {canFleet && (
-            <button className="btn btn-primary" onClick={() => setAdding(true)}>
+            <button
+              className="btn btn-primary"
+              onClick={() => setAdding(true)}
+              title={t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")}
+            >
               <span className="msr text-[18px]">add</span>
-              {t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")}
+              <span className="max-sm:hidden">{t("fleet_add") === "fleet_add" ? "Add Vehicle" : t("fleet_add")}</span>
             </button>
           )}
         </div>

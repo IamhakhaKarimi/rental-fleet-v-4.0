@@ -34,9 +34,10 @@ export function Modal({
   wide?: boolean;
   size?: keyof typeof SIZE_CLASS;
   bodyClassName?: string;
-  /** Panel fills most of the viewport height, with only the body (not the
-   *  header) scrolling internally — for forms that need real room, like the
-   *  step-by-step booking dialog. */
+  /** Panel is capped at most of the viewport height (scrolling internally
+   *  past that), but otherwise sizes to its content instead of always filling
+   *  the cap — a short step (e.g. Rental period) shouldn't stretch into a
+   *  wall of empty space just because a later step is taller. */
   fullHeight?: boolean;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -116,7 +117,7 @@ export function Modal({
           max-lg:rounded-2xl
           max-lg:max-h-[85dvh] max-lg:overflow-y-auto ${
           fullHeight
-            ? "h-[88vh] max-h-[88vh] flex flex-col overflow-hidden max-lg:h-[85dvh] max-lg:max-h-[85dvh]"
+            ? "max-h-[88vh] flex flex-col overflow-hidden max-lg:max-h-[85dvh]"
             : ""
         } ${bodyClassName}`}
         onClick={(e) => e.stopPropagation()}

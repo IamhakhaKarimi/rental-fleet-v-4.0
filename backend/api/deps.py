@@ -5,11 +5,14 @@ Mirrors the Streamlit gating model exactly: every privileged route re-checks
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 from fastapi import Depends, HTTPException, Request, status
 
 from api.security import decode_token, user_from_claims
 from api.settings import settings
 from config.roles import can, ROLE_LEVEL
+from data.repositories import users as users_repo
 
 
 def _extract_token(request: Request) -> str | None:
@@ -21,18 +24,61 @@ def _extract_token(request: Request) -> str | None:
     return tok or None
 
 
+def _resolve(payload: dict | None) -> dict | None:
+    """Turn verified JWT claims into a live user.
+
+    The token's signature proves it was issued by us, but not that it still
+    reflects reality, so the account row is re-read on every request. That closes
+    two gaps a purely stateless check leaves open:
+
+      * a token issued before the account's last password change is rejected, so
+        a password reset genuinely terminates other sessions;
+      * role, name and active-flag come from the DB, so a demotion or a
+        deactivation takes effect immediately instead of lingering until the
+        token expires.
+
+    Costs one indexed lookup per request, which is the right trade here.
+    """
+    if not payload:
+        return None
+    claims = user_from_claims(payload)
+    row = users_repo.get_user(claims["username"])
+    if not row or not row["is_active"]:
+        return None
+
+    changed_at = (row.get("password_changed_at") or "").strip()
+    if changed_at:
+        try:
+            # Stored UTC (see users_repo.update_password); `iat` is UTC too.
+            changed = _dt.datetime.fromisoformat(changed_at).replace(tzinfo=_dt.timezone.utc)
+            issued = _dt.datetime.fromtimestamp(int(payload.get("iat", 0)), _dt.timezone.utc)
+            # 1s of slack: iat is whole seconds, the stamp is truncated to seconds,
+            # so a login in the same second as its own password change is genuine.
+            if issued < changed - _dt.timedelta(seconds=1):
+                return None
+        except Exception:
+            pass  # unparseable stamp must not lock everyone out
+
+    return {
+        "username": row["username"],
+        "full_name": row["full_name"],
+        "role": row["role"],
+        "email": row.get("email") or "",
+        "lang": row.get("lang") or "tr",
+    }
+
+
 def get_current_user(request: Request) -> dict:
     """Require a valid session; raise 401 otherwise."""
-    payload = decode_token(_extract_token(request))
-    if not payload:
+    user = _resolve(decode_token(_extract_token(request)))
+    if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="not_authenticated")
-    return user_from_claims(payload)
+    return user
 
 
 def get_optional_user(request: Request) -> dict | None:
     """Return the user if authenticated, else None (public/visitor endpoints)."""
-    payload = decode_token(_extract_token(request))
-    return user_from_claims(payload) if payload else None
+    return _resolve(decode_token(_extract_token(request)))
 
 
 def require(permission: str):

@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { formatEur } from "@/lib/money";
+import { useIsDesktop } from "@/lib/useMediaQuery";
 import { Modal } from "./Modal";
 
 interface TLRental {
@@ -14,6 +16,10 @@ interface TLRental {
   start_dt: string;
   end_dt: string;
   status: string;
+  rental_days?: number;
+  daily_rate?: number;
+  total_amount?: number;
+  deposit?: number;
 }
 interface TLVehicle {
   vehicle_id: string;
@@ -25,7 +31,13 @@ interface TLVehicle {
 type Zoom = "day" | "week" | "month" | "year";
 const DAY = 86400000;
 const HOUR = 3600000;
-const LABEL_W = 150;
+/** Sticky vehicle-label gutter. 150px is right on a desktop, but it is wider
+ *  than the whole content column used to be on a 375px phone — the chart itself
+ *  would be almost entirely off-screen before you scrolled. 104px still fits
+ *  "HYUNDAI ACCENT" truncated over its plate. Fed to inline `style`, so it has
+ *  to be a JS value; CSS cannot reach it. */
+const LABEL_W_DESKTOP = 150;
+const LABEL_W_NARROW = 104;
 const ROW_H = 34;
 const PX_PER_DAY: Record<Zoom, number> = { day: 240, week: 110, month: 42, year: 10 };
 const parse = (d: string) => new Date(d.replace(" ", "T")).getTime();
@@ -44,6 +56,8 @@ const digits = (s?: string) => (s || "").replace(/\D/g, "");
  */
 export function Timeline() {
   const { t, lang } = useI18n();
+  const isDesktop = useIsDesktop();
+  const LABEL_W = isDesktop ? LABEL_W_DESKTOP : LABEL_W_NARROW;
   const [zoom, setZoom] = useState<Zoom>("month");
   const [showDone, setShowDone] = useState(false);
   const [search, setSearch] = useState("");
@@ -217,8 +231,11 @@ export function Timeline() {
   return (
     <div className="neo-panel">
       {/* Toolbar */}
-      <div className="grid grid-cols-12 gap-2 items-center mb-2.5">
-        <div className="col-span-12 md:col-span-6 flex items-center gap-2 flex-wrap">
+      {/* 4 columns on a phone, 8 on a tablet, the original 12 from `lg` up.
+          The `md:` spans below carry explicit `lg:` counterparts so desktop
+          still resolves to the 6/4/2 split it has always used. */}
+      <div className="grid grid-cols-4 md:grid-cols-8 lg:grid-cols-12 gap-2 items-center mb-2.5">
+        <div className="col-span-4 md:col-span-8 lg:col-span-6 flex items-center gap-2 flex-wrap">
           <div className="inline-flex rounded-pill border border-line overflow-hidden">
             {zooms.map((z) => (
               <button
@@ -244,13 +261,13 @@ export function Timeline() {
             {tf("timeline_today", "Today")}
           </button>
         </div>
-        <div className="col-span-7 md:col-span-4 flex items-center">
+        <div className="col-span-4 md:col-span-4 lg:col-span-4 flex items-center">
           <label className="flex items-center gap-2 text-xs text-muted select-none cursor-pointer" title={tf("show_done_hint", "Include finished (closed) rentals")}>
             <input type="checkbox" className="w-auto" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
             {tf("show_done", "Show done")}
           </label>
         </div>
-        <div className="col-span-5 md:col-span-2">
+        <div className="col-span-4 md:col-span-4 lg:col-span-2">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -382,6 +399,27 @@ export function Timeline() {
                 {selected.status === "Active" ? tf("status_active", "Active") : tf("status_closed", "Closed")}
               </span>
             </div>
+            {/* Negotiated rate + what it adds up to — the figures staff are asked
+                for most often when a client rings about a booking. */}
+            {selected.daily_rate != null && (
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                <div>
+                  <div className="text-[11px] text-muted">{tf("negotiated_rate", "Negotiated Rate")}</div>
+                  <div className="font-semibold text-ink">
+                    {formatEur(selected.daily_rate)}
+                    <span className="text-muted font-normal">/{tf("day", "day")}</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-muted">{tf("days", "Days")}</div>
+                  <div className="font-semibold text-ink">{selected.rental_days ?? "—"}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-muted">{tf("live_total", "Total")}</div>
+                  <div className="font-semibold text-ink">{formatEur(selected.total_amount)}</div>
+                </div>
+              </div>
+            )}
             {selected.phone && (
               <div className="flex items-center gap-2 pt-1">
                 <span className="msr text-[18px] text-muted">call</span>

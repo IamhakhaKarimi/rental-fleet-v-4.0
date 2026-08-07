@@ -52,7 +52,16 @@ function Row({ item, overdue }: { item: NotifItem; overdue: boolean }) {
   );
 }
 
-export function Bell({ expanded }: { expanded?: boolean }) {
+export function Bell({
+  expanded,
+  variant = "sidebar",
+}: {
+  expanded?: boolean;
+  /** "drawer" is the phone burger-sheet row: always labelled, full-height tap
+   *  target, no rail/collapsed state. Only the trigger's face changes — the
+   *  badge/tone logic and the Modal below are shared verbatim. */
+  variant?: "sidebar" | "drawer";
+}) {
   const t = useT();
   const [data, setData] = useState<Notifs | null>(null);
   const [open, setOpen] = useState(false);
@@ -76,18 +85,25 @@ export function Bell({ expanded }: { expanded?: boolean }) {
   // Badge text: white reads on red; the yellow fill takes dark ink for contrast.
   const badgeText = overdueN > 0 ? "#ffffff" : "#1a1c1e";
 
+  const label = t("reminders") === "reminders" ? "Reminders" : t("reminders");
+  const isDrawer = variant === "drawer";
+
   return (
     <>
       <button
         onClick={() => setOpen(true)}
-        className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] hover:bg-[rgba(17,24,39,0.05)] ${toneClass} ${
-          expanded ? "" : "justify-center"
-        }`}
+        className={
+          isDrawer
+            ? `w-full flex items-center gap-3 rounded-xl px-3 min-h-[52px] text-[0.95rem] font-medium text-ink active:bg-bg ${toneClass}`
+            : `w-full flex items-center gap-3 rounded-pill px-3 py-2 min-h-[44px] text-[0.78rem] active:bg-[rgba(17,24,39,0.08)] lg:hover:bg-[rgba(17,24,39,0.05)] ${toneClass} ${
+                expanded ? "" : "justify-center"
+              }`
+        }
         aria-label="Reminders"
         title={overdueN > 0 ? "Overdue returns" : dueSoonN > 0 ? "Returns due within 24h" : "Reminders"}
       >
-        <span className="relative inline-flex">
-          <span className="msr text-[20px]">notifications</span>
+        <span className="relative inline-flex shrink-0">
+          <span className={`msr ${isDrawer ? "text-[22px]" : "text-[20px]"}`}>notifications</span>
           {badge > 0 && (
             <span
               style={{ background: badgeColor, color: badgeText }}
@@ -97,11 +113,11 @@ export function Bell({ expanded }: { expanded?: boolean }) {
             </span>
           )}
         </span>
-        {expanded && <span>{t("reminders") === "reminders" ? "Reminders" : t("reminders")}</span>}
+        {(isDrawer || expanded) && <span>{label}</span>}
       </button>
 
       {open && (
-        <Modal title={t("reminders") === "reminders" ? "Reminders" : t("reminders")} onClose={() => setOpen(false)}>
+        <Modal title={label} onClose={() => setOpen(false)}>
           {badge === 0 && (
             <div className="text-sm text-ok flex items-center gap-2 py-4">
               <span className="msr text-[18px]">check_circle</span>

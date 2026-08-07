@@ -1,26 +1,37 @@
 @echo off
+REM Boots the launcher, which serves index.html and starts the servers when you
+REM pick a mode there. No more stray server windows to keep track of.
 title Balkan Fleet v4.0 - Launcher
 cd /d "%~dp0"
 
-echo ============================================
-echo   Balkan Car Rentals - Fleet Console v4.0
-echo ============================================
-echo.
-echo Starting API (FastAPI) on http://localhost:8001 ...
-start "Balkan Fleet API" cmd /k "cd /d "%~dp0backend" && python -m uvicorn api.main:app --port 8001"
+where python >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo   Python was not found on PATH.
+  echo   Install Python 3.11+ from python.org, then run this again.
+  echo.
+  pause
+  exit /b 1
+)
 
-echo Starting Web app (Next.js) on http://localhost:3000 ...
-start "Balkan Fleet Web" cmd /k "cd /d "%~dp0frontend" && npm run dev"
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo   Node.js / npm was not found on PATH.
+  echo   Install Node.js from nodejs.org, then run this again.
+  echo.
+  pause
+  exit /b 1
+)
 
-echo.
-echo Waiting for the servers to boot...
-timeout /t 9 /nobreak >nul
+if not exist "frontend\node_modules" (
+  echo.
+  echo   First run - installing frontend dependencies. This takes a few minutes.
+  echo.
+  pushd frontend
+  call npm install
+  popd
+)
 
-echo Opening the launcher page...
-start "" "%~dp0index.html"
-
-echo.
-echo Two server windows opened. Login: admin / admin
-echo Close those windows (or run stop.bat) to stop the app.
-echo.
-pause
+python "launcher\launcher.py"
+if errorlevel 1 pause

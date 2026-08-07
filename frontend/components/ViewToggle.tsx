@@ -19,7 +19,10 @@ export function ViewToggle({
   tableTitle?: string;
 }) {
   return (
-    <div className="inline-flex rounded-pill border border-line overflow-hidden shrink-0">
+    // Hidden below `lg`: `useResponsiveView` forces the card view there, so a
+    // switch that cannot change anything would just be a dead control taking up
+    // room in an already-crowded phone header.
+    <div className="inline-flex rounded-pill border border-line overflow-hidden shrink-0 max-lg:hidden">
       <button
         type="button"
         onClick={() => onChange("cards")}

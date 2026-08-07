@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -13,6 +13,21 @@ const jakarta = Plus_Jakarta_Sans({
 export const metadata: Metadata = {
   title: "Balkan Car Rentals — Fleet Console",
   description: "Fleet Console v4.0",
+};
+
+/**
+ * There was no viewport export at all — Next's default covers width/scale, but
+ * `viewportFit: "cover"` is what makes `env(safe-area-inset-*)` resolve to
+ * anything but 0. The bottom nav bar and the burger sheet both pad themselves
+ * with it so they clear the home indicator on a notched phone.
+ *
+ * Note there is no `maximumScale`: pinch-zoom stays available, because taking it
+ * away breaks accessibility for anyone who relies on it.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 // Apply the saved night-mode preference before paint to avoid a flash.

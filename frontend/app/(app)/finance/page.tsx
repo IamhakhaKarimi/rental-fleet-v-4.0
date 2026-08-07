@@ -7,6 +7,8 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
+import { DateField } from "@/components/DateField";
+import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 
 /* ── Response shapes (from backend/services/finance_service.py) ──────────────
    All money fields are INTEGER CENTS. */
@@ -59,9 +61,26 @@ interface CostRow {
   period_date: string;
   note: string | null;
 }
+interface CompensationRow {
+  charge_id: number;
+  vehicle_id: string;
+  make_model: string | null;
+  license_plate?: string | null;
+  year?: number | null;
+  deal_id?: string | null;
+  type: string;
+  amount: number;
+  period_date: string;
+  note: string | null;
+}
 interface ActiveVehicle {
   vehicle_id: string;
   make_model: string;
+  license_plate?: string | null;
+}
+
+function vehicleLabel(v: ActiveVehicle): string {
+  return v.license_plate ? `${v.license_plate} — ${v.make_model}` : `${v.make_model} (${v.vehicle_id})`;
 }
 
 const COST_TYPES = [
@@ -71,6 +90,16 @@ const COST_TYPES = [
   "fuel",
   "financing",
   "registration",
+  "other",
+] as const;
+
+const COMPENSATION_TYPES = [
+  "damage",
+  "mechanic_fee",
+  "traffic_fine",
+  "cleaning_fee",
+  "fuel_shortage",
+  "lost_item",
   "other",
 ] as const;
 
@@ -90,7 +119,7 @@ const IncomeSharePieChart = dynamic(
 
 const cents = (euros: number) => euros / 100;
 
-type TabKey = "overview" | "monthly" | "yearly" | "vehicle" | "customer" | "costs";
+type TabKey = "overview" | "monthly" | "yearly" | "vehicle" | "customer" | "costs" | "compensation";
 
 export default function FinancePage() {
   const { t, lang } = useI18n();
@@ -110,6 +139,7 @@ export default function FinancePage() {
   const [byVehicle, setByVehicle] = useState<VehicleProfit[]>([]);
   const [byCustomer, setByCustomer] = useState<CustomerRevenue[]>([]);
   const [costs, setCosts] = useState<CostRow[]>([]);
+  const [compensations, setCompensations] = useState<CompensationRow[]>([]);
   const [activeVehicles, setActiveVehicles] = useState<ActiveVehicle[]>([]);
 
   const loadAll = useCallback(() => {
@@ -122,6 +152,7 @@ export default function FinancePage() {
     apiGet<VehicleProfit[]>("/api/finance/profit-by-vehicle").then(setByVehicle).catch(() => {});
     apiGet<CustomerRevenue[]>("/api/finance/revenue-by-customer").then(setByCustomer).catch(() => {});
     apiGet<CostRow[]>("/api/finance/costs?limit=100").then(setCosts).catch(() => {});
+    apiGet<CompensationRow[]>("/api/finance/compensations?limit=100").then(setCompensations).catch(() => {});
     apiGet<ActiveVehicle[]>("/api/vehicles/active").then(setActiveVehicles).catch(() => {});
   }, [allowed]);
 
@@ -178,6 +209,7 @@ export default function FinancePage() {
   }
 
   const costLabel = (type: string) => tx(`cost_${type}`, type.charAt(0).toUpperCase() + type.slice(1));
+  const compLabel = (type: string) => tx(`comp_${type}`, type.charAt(0).toUpperCase() + type.slice(1));
 
   const tabs: { key: TabKey; label: string; icon: string }[] = [
     { key: "overview", label: tx("fin_tab_overview", "Overview"), icon: "donut_small" },
@@ -186,6 +218,7 @@ export default function FinancePage() {
     { key: "vehicle", label: tx("fin_tab_vehicle", "By Vehicle"), icon: "directions_car" },
     { key: "customer", label: tx("fin_tab_customer", "By Customer"), icon: "group" },
     { key: "costs", label: tx("fin_tab_costs", "Costs"), icon: "payments" },
+    { key: "compensation", label: tx("fin_tab_compensation", "Compensation"), icon: "car_crash" },
   ];
 
   return (
@@ -197,10 +230,13 @@ export default function FinancePage() {
 
       {/* Headline finance figures — bento board (mirrors the dashboard's
           "Fleet at a glance" board so the two pages share one visual language). */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 [grid-auto-rows:minmax(116px,auto)]">
+      {/* 4 / 8 / 4 columns. Each tile carries an explicit `lg:` span so the
+          tablet-tier `md:` values cannot leak upward and reshape the desktop
+          board (Tailwind breakpoints are min-width). */}
+      <div className="grid grid-cols-4 md:grid-cols-8 lg:grid-cols-4 gap-4 [grid-auto-rows:minmax(116px,auto)]">
         {/* Hero — net profit + margin bar */}
         <div
-          className="bento-in card col-span-2 row-span-2 p-6 flex flex-col justify-between"
+          className="bento-in card col-span-4 md:col-span-4 lg:col-span-2 row-span-2 p-5 lg:p-6 flex flex-col justify-between"
           style={{ background: "var(--accent)", color: "var(--bg)", border: "none" }}
         >
           <div className="flex items-center gap-2 text-sm" style={{ opacity: 0.75 }}>
@@ -230,7 +266,10 @@ export default function FinancePage() {
         </div>
 
         {/* Revenue */}
-        <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "45ms" }}>
+        <div
+          className="bento-in card col-span-2 md:col-span-2 lg:col-span-1 p-5 flex flex-col justify-center"
+          style={{ animationDelay: "45ms" }}
+        >
           <div className="flex items-center gap-1.5 text-xs text-muted">
             <span className="msr text-[16px]">trending_up</span>
             {tx("total_revenue", "Total Revenue")}
@@ -241,7 +280,10 @@ export default function FinancePage() {
         </div>
 
         {/* Cost */}
-        <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "90ms" }}>
+        <div
+          className="bento-in card col-span-2 md:col-span-2 lg:col-span-1 p-5 flex flex-col justify-center"
+          style={{ animationDelay: "90ms" }}
+        >
           <div className="flex items-center gap-1.5 text-xs text-muted">
             <span className="msr text-[16px]">trending_down</span>
             {tx("col_cost", "Total Cost")}
@@ -253,7 +295,7 @@ export default function FinancePage() {
 
         {/* Revenue mix — wide strip (rental / penalty / damage) */}
         <div
-          className="bento-in card col-span-2 p-5 flex items-center justify-between gap-2"
+          className="bento-in card col-span-4 md:col-span-8 lg:col-span-2 p-5 flex items-center justify-between gap-2"
           style={{ animationDelay: "135ms" }}
         >
           {[
@@ -278,15 +320,21 @@ export default function FinancePage() {
       </div>
 
       {/* Tab menu — bento pill bar */}
+      {/* Seven tabs. Below `lg` they become one horizontally-scrollable row
+          rather than wrapping into a four-line block that pushes the content
+          off a phone screen. `.no-scrollbar` already exists in globals.css. */}
       <div
-        className="bento-in card p-1.5 flex items-center gap-1 flex-wrap"
+        className="bento-in card p-1.5 flex items-center gap-1 flex-wrap
+                   max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:no-scrollbar"
         style={{ animationDelay: "180ms" }}
       >
         {tabs.map((tb) => (
           <button
             key={tb.key}
             onClick={() => setTab(tb.key)}
-            className={`seg-btn rounded-lg flex items-center gap-1.5 ${tab === tb.key ? "active" : ""}`}
+            className={`seg-btn rounded-lg flex items-center gap-1.5 max-lg:shrink-0 max-lg:whitespace-nowrap ${
+              tab === tb.key ? "active" : ""
+            }`}
           >
             <span className="msr text-[16px]">{tb.icon}</span>
             {tb.label}
@@ -329,6 +377,15 @@ export default function FinancePage() {
           tx={tx}
           onChanged={loadAll}
           reportButtons={<ReportButtons slug="expenses" danger />}
+        />
+      )}
+      {tab === "compensation" && (
+        <CompensationTab
+          rows={compensations}
+          vehicles={activeVehicles}
+          compLabel={compLabel}
+          tx={tx}
+          onChanged={loadAll}
         />
       )}
 
@@ -386,7 +443,7 @@ function OverviewTab({
     <div className="flex justify-end">{reportButtons}</div>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* Revenue breakdown */}
-      <div className="card p-5 space-y-3">
+      <div className="card p-5 space-y-3 overflow-x-auto">
         <h2 className="text-base font-semibold">{tx("finance_title", "Revenue")}</h2>
         <table className="w-full">
           <tbody>
@@ -419,7 +476,7 @@ function OverviewTab({
       </div>
 
       {/* Cost by type */}
-      <div className="card p-5 space-y-3">
+      <div className="card p-5 space-y-3 overflow-x-auto">
         <h2 className="text-base font-semibold">{tx("cost_breakdown", "Cost by Type")}</h2>
         <table className="w-full">
           <thead>
@@ -874,6 +931,9 @@ function CostsTab({
 }) {
   const toast = useToast();
   const today = new Date().toISOString().slice(0, 10);
+  // The ledger is capped at the licensed year server-side, so the picker is too.
+  const license = useLicenseLimits();
+  const licenseMax = license?.max_date;
   const [vehicleId, setVehicleId] = useState("");
   const [costType, setCostType] = useState<string>("maintenance");
   const [amount, setAmount] = useState<number>(0);
@@ -906,7 +966,11 @@ function CostsTab({
       setNote("");
       onChanged();
     } catch (e: any) {
-      setErr(tx(e?.key || "error", "Could not save cost."));
+      setErr(
+        isLicenseError(e)
+          ? licenseMessage((k) => tx(k, k), license)
+          : tx(e?.key || "error", "Could not save cost.")
+      );
     } finally {
       setBusy(false);
     }
@@ -937,7 +1001,7 @@ function CostsTab({
               {vehicles.length === 0 && <option value="">—</option>}
               {vehicles.map((v) => (
                 <option key={v.vehicle_id} value={v.vehicle_id}>
-                  {v.make_model} ({v.vehicle_id})
+                  {vehicleLabel(v)}
                 </option>
               ))}
             </select>
@@ -964,7 +1028,7 @@ function CostsTab({
           </label>
           <label className="text-xs text-muted">
             {tx("cost_date", "Date")}
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <DateField value={date} onChange={setDate} max={licenseMax} ariaLabel={tx("cost_date", "Date")} />
           </label>
           <label className="text-xs text-muted sm:col-span-2">
             {tx("cost_note", "Note")}
@@ -1002,6 +1066,176 @@ function CostsTab({
                   <span className="text-xs text-muted ml-1">{c.vehicle_id}</span>
                 </Td>
                 <Td>{costLabel(c.type)}</Td>
+                <Td>{c.note || "—"}</Td>
+                <Td right bold>
+                  {formatEur(c.amount)}
+                </Td>
+                <Td right>
+                  <button className="btn btn-danger !py-1.5 !px-2.5 text-xs" onClick={() => del(c)}>
+                    <span className="msr text-[16px]">delete</span>
+                  </button>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── Damage compensation (add form + recent entries with delete) ─────────────
+   Mirrors CostsTab, but for money billed back to a client (damage, mechanic
+   invoices forwarded to them, traffic fines, cleaning, fuel shortfall, lost
+   items) rather than money the business spends. Entries land in the same
+   `charges` income ledger as rental/deposit charges, so they flow straight
+   into the revenue totals shown elsewhere on this page. */
+function CompensationTab({
+  rows,
+  vehicles,
+  compLabel,
+  tx,
+  onChanged,
+}: {
+  rows: CompensationRow[];
+  vehicles: ActiveVehicle[];
+  compLabel: (t: string) => string;
+  tx: (k: string, f: string) => string;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const today = new Date().toISOString().slice(0, 10);
+  // The ledger is capped at the licensed year server-side, so the picker is too.
+  const license = useLicenseLimits();
+  const licenseMax = license?.max_date;
+  const [vehicleId, setVehicleId] = useState("");
+  const [compType, setCompType] = useState<string>("damage");
+  const [amount, setAmount] = useState<number>(0);
+  const [date, setDate] = useState(today);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!vehicleId && vehicles.length) setVehicleId(vehicles[0].vehicle_id);
+  }, [vehicles, vehicleId]);
+
+  async function submit() {
+    if (!vehicleId || !(amount > 0)) {
+      setErr(tx("fields_required", "All fields are required."));
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await apiPost("/api/finance/compensations", {
+        vehicle_id: vehicleId,
+        comp_type: compType,
+        amount_euros: amount,
+        period_date: date,
+        note,
+      });
+      setAmount(0);
+      setNote("");
+      onChanged();
+    } catch (e: any) {
+      setErr(
+        isLicenseError(e)
+          ? licenseMessage((k) => tx(k, k), license)
+          : tx(e?.key || "error", "Could not save compensation.")
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function del(c: CompensationRow) {
+    if (!confirm(`${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${formatEur(c.amount)}`)) return;
+    try {
+      await apiDel(`/api/finance/compensations/${c.charge_id}`);
+      onChanged();
+    } catch (e: any) {
+      toast.error(tx(e?.key || "error", "Could not delete."));
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Add compensation form */}
+      <div className="card p-5 space-y-3">
+        <h2 className="text-base font-semibold">{tx("add_compensation_section", "Add Damage Compensation")}</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <label className="text-xs text-muted">
+            {tx("col_car", "Vehicle")}
+            <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
+              {vehicles.length === 0 && <option value="">—</option>}
+              {vehicles.map((v) => (
+                <option key={v.vehicle_id} value={v.vehicle_id}>
+                  {vehicleLabel(v)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-muted">
+            {tx("comp_type", "Compensation Type")}
+            <select value={compType} onChange={(e) => setCompType(e.target.value)}>
+              {COMPENSATION_TYPES.map((ct) => (
+                <option key={ct} value={ct}>
+                  {compLabel(ct)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-muted">
+            {tx("cost_amount", "Amount")} (€)
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(+e.target.value)}
+            />
+          </label>
+          <label className="text-xs text-muted">
+            {tx("cost_date", "Date")}
+            <DateField value={date} onChange={setDate} max={licenseMax} ariaLabel={tx("cost_date", "Date")} />
+          </label>
+          <label className="text-xs text-muted sm:col-span-2">
+            {tx("cost_note", "Note")}
+            <input value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+        </div>
+        {err && <div className="text-sm text-danger">{err}</div>}
+        <button className="btn btn-primary" onClick={submit} disabled={busy}>
+          <span className="msr text-[18px]">add</span>
+          {busy ? "…" : tx("add_compensation_btn", "Add Compensation")}
+        </button>
+      </div>
+
+      {/* Recent compensation entries */}
+      <div className="card p-5 overflow-x-auto">
+        <h2 className="text-base font-semibold mb-3">{tx("finance_records_section", "Recent Costs")}</h2>
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-line">
+              <Th>{tx("cost_date", "Date")}</Th>
+              <Th>{tx("col_car", "Vehicle")}</Th>
+              <Th>{tx("col_type", "Type")}</Th>
+              <Th>{tx("cost_note", "Note")}</Th>
+              <Th right>{tx("cost_amount", "Amount")}</Th>
+              <Th right>{tx("col_actions", "Actions")}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && <EmptyRow cols={6} label={tx("no_data", "No data yet.")} />}
+            {rows.map((c) => (
+              <tr key={c.charge_id} className="border-b border-line last:border-0">
+                <Td>{c.period_date}</Td>
+                <Td>
+                  <span className="font-medium">{c.make_model || "—"}</span>
+                  <span className="text-xs text-muted ml-1">{c.vehicle_id}</span>
+                </Td>
+                <Td>{compLabel(c.type)}</Td>
                 <Td>{c.note || "—"}</Td>
                 <Td right bold>
                   {formatEur(c.amount)}

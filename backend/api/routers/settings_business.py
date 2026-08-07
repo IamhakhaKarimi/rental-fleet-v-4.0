@@ -273,6 +273,7 @@ def license_status(user: dict = Depends(require("edit_business_settings"))) -> d
     return {
         "licensed_year": licensing_service.licensed_year(),
         "current_year": cy,
+        "max_date": licensing_service.max_date().isoformat(),
         "year_options": list(range(cy, cy + 11)),
     }
 
@@ -280,9 +281,15 @@ def license_status(user: dict = Depends(require("edit_business_settings"))) -> d
 @router.put("/license/year")
 def set_license_year(body: LicenseYearIn,
                      user: dict = Depends(require("edit_business_settings"))) -> dict:
-    licensing_service.set_licensed_year(int(body.year))
+    """Set the cap directly. ``edit_business_settings`` is super-admin only and is
+    in LOCKED_PERMISSIONS, so the Admin Panel cannot delegate this to an admin —
+    an admin unlocks a year only by redeeming a key the super-admin issued."""
+    try:
+        licensed = licensing_service.set_licensed_year(int(body.year))
+    except (TypeError, ValueError):
+        raise HTTPException(400, detail="fields_required")
     audit_service.record(user, "set_licensed_year", "license", str(body.year))
-    return {"ok": True}
+    return {"ok": True, "licensed_year": licensed}
 
 
 @router.get("/licenses")
@@ -299,14 +306,27 @@ def get_license(license_id: int,
     return row
 
 
+def _covered_through(body: LicenseIn) -> int:
+    """Last year a purchase record covers. Validated here so a malformed record
+    can never hand ``extend_licensed_year`` a nonsense year."""
+    year, years = int(body.year), int(body.years)
+    if years < 1 or not (licensing_service.MIN_LICENSE_YEAR <= year <= licensing_service.MAX_LICENSE_YEAR):
+        raise HTTPException(400, detail="fields_required")
+    through = year + years - 1
+    if through > licensing_service.MAX_LICENSE_YEAR:
+        raise HTTPException(400, detail="fields_required")
+    return through
+
+
 @router.post("/licenses", status_code=201)
 def add_license(body: LicenseIn,
                 user: dict = Depends(require("edit_business_settings"))) -> dict:
+    through = _covered_through(body)
     lid = lic_repo.add_license(
         body.licensee, int(body.year), int(body.years),
         _euros_to_cents(body.amount_eur), body.purchase_date, body.notes,
     )
-    licensing_service.extend_licensed_year(int(body.year) + int(body.years) - 1)
+    licensing_service.extend_licensed_year(through)
     audit_service.record(user, "add_license", "license", str(lid), body.licensee)
     return {"ok": True, "license_id": lid}
 
@@ -316,11 +336,12 @@ def update_license(license_id: int, body: LicenseIn,
                    user: dict = Depends(require("edit_business_settings"))) -> dict:
     if not lic_repo.get_license(license_id):
         raise HTTPException(404, detail="not_found")
+    through = _covered_through(body)
     lic_repo.update_license(
         license_id, body.licensee, int(body.year), int(body.years),
         _euros_to_cents(body.amount_eur), body.purchase_date, body.notes,
     )
-    licensing_service.extend_licensed_year(int(body.year) + int(body.years) - 1)
+    licensing_service.extend_licensed_year(through)
     audit_service.record(user, "edit_license", "license", str(license_id), body.licensee)
     return {"ok": True}
 

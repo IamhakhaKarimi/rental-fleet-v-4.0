@@ -1,13 +1,16 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, apiDel, apiGet, apiPost, apiPut, API_BASE } from "@/lib/api";
+import { api, apiDel, apiGet, apiPost, apiPut, apiBase } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n, useT } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { useTheme } from "@/lib/theme";
+import { licenseCapNote, refreshLicenseLimits } from "@/lib/license";
 import { Modal } from "@/components/Modal";
+import { DateField } from "@/components/DateField";
+import { AdminPanel } from "@/components/AdminPanel";
 
 // English fallback when a key isn't in the dictionary.
 const f = (t: (k: string) => string, key: string, fb: string) =>
@@ -81,6 +84,34 @@ interface LangOption {
   label: string;
 }
 
+interface PasswordPolicy {
+  min_length: number;
+  min_classes: number;
+  classes: string[];
+}
+
+// Mirrors services/auth_service.validate_password so the user sees the verdict
+// live, as they type. The server re-checks — this is guidance, never the gate.
+function checkPasswordStrength(pw: string, policy: PasswordPolicy | null) {
+  const min = policy?.min_length ?? 12;
+  const lower = /[a-z]/.test(pw);
+  const upper = /[A-Z]/.test(pw);
+  const digit = /[0-9]/.test(pw);
+  const special = /[^A-Za-z0-9]/.test(pw);
+  const classes = [lower, upper, digit, special].filter(Boolean).length;
+  const longEnough = pw.length >= min;
+  return {
+    min,
+    longEnough,
+    lower,
+    upper,
+    digit,
+    special,
+    classes,
+    ok: longEnough && classes >= (policy?.min_classes ?? 3),
+  };
+}
+
 function ProfileTab() {
   const t = useT();
   const toast = useToast();
@@ -92,9 +123,15 @@ function ProfileTab() {
   const [cur, setCur] = useState("");
   const [nw, setNw] = useState("");
   const [cnf, setCnf] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [policy, setPolicy] = useState<PasswordPolicy | null>(null);
   const [langs, setLangs] = useState<LangOption[]>([]);
   const [curLang, setCurLang] = useState("tr");
   const [msg, setMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
+
+  const strength = useMemo(() => checkPasswordStrength(nw, policy), [nw, policy]);
+  const pwMatches = nw.length > 0 && nw === cnf;
 
   const load = useCallback(() => {
     apiGet<Profile>("/api/profile")
@@ -110,8 +147,15 @@ function ProfileTab() {
         setCurLang(d.current || "tr");
       })
       .catch(() => {});
+    apiGet<PasswordPolicy>("/api/auth/password-policy")
+      .then(setPolicy)
+      .catch(() => {});
   }, []);
   useEffect(load, [load]);
+
+  // Backend error keys carry a raw "{n}" placeholder for the configured
+  // minimum length — t() does no interpolation, so fill it in here.
+  const errText = (key: string) => t(key).replace("{n}", String(policy?.min_length ?? 12));
 
   async function run(fn: () => Promise<void>, okMsg: string) {
     setMsg({ ok: true, m: "" });
@@ -120,9 +164,45 @@ function ProfileTab() {
       setMsg({ ok: true, m: okMsg });
       toast.success(okMsg);
     } catch (e: any) {
-      setMsg({ ok: false, m: t(e?.key || "error") });
+      setMsg({ ok: false, m: errText(e?.key || "error") });
     }
   }
+
+  async function changePassword() {
+    setPwMsg({ ok: true, m: "" });
+    if (!pwMatches) {
+      setPwMsg({ ok: false, m: f(t, "passwords_no_match", "Passwords do not match.") });
+      return;
+    }
+    if (!strength.ok) {
+      setPwMsg({
+        ok: false,
+        m: f(t, "password_too_simple_hint", "Please add all necessary characters to create safe password."),
+      });
+      return;
+    }
+    try {
+      await apiPut("/api/profile/password", {
+        current_password: cur,
+        new_password: nw,
+        confirm_password: cnf,
+      });
+      setCur("");
+      setNw("");
+      setCnf("");
+      setPwMsg({ ok: true, m: "" });
+      toast.success(f(t, "saved", "Saved"));
+    } catch (e: any) {
+      setPwMsg({ ok: false, m: errText(e?.key || "error") });
+    }
+  }
+
+  const rule = (ok: boolean, label: string) => (
+    <div className={`flex items-center gap-1.5 text-xs ${ok ? "text-muted" : "text-danger"}`}>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${ok ? "bg-muted" : "bg-danger"}`} />
+      {label}
+    </div>
+  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -130,7 +210,7 @@ function ProfileTab() {
         <div className="text-xs text-muted">
           {f(t, "username", "Username")}: <span className="text-ink font-medium">{p?.username || "—"}</span>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label={f(t, "full_name", "Full Name")} full>
             <input value={fullName} onChange={(e) => setFullName(e.target.value)} />
           </Field>
@@ -169,28 +249,73 @@ function ProfileTab() {
 
       <SectionCard title={f(t, "change_password", "Change Password")} icon="lock">
         <Field label={f(t, "current_password", "Current Password")} full>
-          <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} />
+          <div className="flex items-center gap-2">
+            <input
+              type={showPw ? "text" : "password"}
+              value={cur}
+              onChange={(e) => setCur(e.target.value)}
+              autoComplete="current-password"
+              className={`flex-1 min-w-0 ${cur ? "!border-ok" : ""}`}
+            />
+            {cur && <span className="msr text-[18px] text-ok">check_circle</span>}
+          </div>
         </Field>
         <Field label={f(t, "new_password", "New Password")} full>
-          <input type="password" value={nw} onChange={(e) => setNw(e.target.value)} />
+          <div className="flex items-center gap-2">
+            <input
+              type={showPw ? "text" : "password"}
+              value={nw}
+              onChange={(e) => setNw(e.target.value)}
+              autoComplete="new-password"
+              className={`flex-1 min-w-0 ${nw ? (strength.ok ? "!border-ok" : "!border-danger") : ""}`}
+            />
+            <button
+              type="button"
+              className="btn !p-2"
+              onClick={() => setShowPw((v) => !v)}
+              aria-label={showPw ? "hide password" : "show password"}
+            >
+              <span className="msr text-[16px]">{showPw ? "visibility_off" : "visibility"}</span>
+            </button>
+          </div>
         </Field>
+
+        {nw && !strength.ok && (
+          <div className="col-span-2 space-y-1.5">
+            <div className="text-xs text-danger">
+              {f(t, "password_too_simple_hint", "Please add all necessary characters to create safe password.")}
+            </div>
+            <div className="space-y-1">
+              {rule(strength.longEnough, f(t, "password_min_chars", `Minimum characters ${strength.min}`).replace("{n}", String(strength.min)))}
+              {rule(strength.upper, f(t, "password_need_upper", "One uppercase character"))}
+              {rule(strength.lower, f(t, "password_need_lower", "One lowercase character"))}
+              {rule(strength.special, f(t, "password_need_special", "One special character"))}
+              {rule(strength.digit, f(t, "password_need_digit", "One number"))}
+            </div>
+          </div>
+        )}
+
         <Field label={f(t, "confirm_password", "Confirm Password")} full>
-          <input type="password" value={cnf} onChange={(e) => setCnf(e.target.value)} />
+          <input
+            type={showPw ? "text" : "password"}
+            value={cnf}
+            onChange={(e) => setCnf(e.target.value)}
+            autoComplete="new-password"
+            className={cnf ? (pwMatches ? "!border-ok" : "!border-danger") : ""}
+          />
+          {cnf.length > 0 && !pwMatches && (
+            <div className="text-xs text-danger mt-1">
+              {f(t, "passwords_no_match", "Passwords do not match.")}
+            </div>
+          )}
         </Field>
+
+        <Notice ok={pwMsg.ok} msg={pwMsg.m} />
+
         <button
           className="btn btn-primary w-full"
-          onClick={() =>
-            run(async () => {
-              await apiPut("/api/profile/password", {
-                current_password: cur,
-                new_password: nw,
-                confirm_password: cnf,
-              });
-              setCur("");
-              setNw("");
-              setCnf("");
-            }, f(t, "saved", "Saved"))
-          }
+          disabled={!cur || !nw || !cnf || !strength.ok || !pwMatches}
+          onClick={changePassword}
         >
           {f(t, "update_btn", "Save")}
         </button>
@@ -500,7 +625,7 @@ function AddUserForm({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label={f(t, "username", "Username")}>
           <input value={f0.username} onChange={(e) => set("username", e.target.value)} />
         </Field>
@@ -598,7 +723,7 @@ function ImageUploader({
       {has && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`${API_BASE}${imgPath}?b=${bust}`}
+          src={`${apiBase()}${imgPath}?b=${bust}`}
           alt={label}
           className="max-h-20 rounded-lg border border-line bg-white p-1"
         />
@@ -714,7 +839,7 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {THEME_COLOR_KEYS.map((c) => (
             <Field key={c.key} label={f(t, c.label, c.fb)}>
               <div className="flex items-center gap-2">
@@ -741,7 +866,7 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
           <div className="text-xs font-semibold text-muted mb-2">
             {f(t, "theme_bar_gradient_title", "Active Rental Bar Gradient")}
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {BAR_GRADIENT_KEYS.map((c) => (
               <Field key={c.key} label={f(t, c.label, c.fb)}>
                 <div className="flex items-center gap-2">
@@ -774,10 +899,10 @@ function ThemeDialog({ onClose }: { onClose: () => void }) {
         {err && <div className="text-sm text-danger">{err}</div>}
         <div className="flex items-center gap-2">
           <button className="btn btn-primary flex-1" onClick={save} disabled={busy}>
-            {busy ? "…" : f(t, "update_btn", "Save")}
+            {busy ? "…" : f(t, "theme_save_btn", "Save")}
           </button>
           <button className="btn flex-1" onClick={reset} disabled={busy}>
-            {f(t, "reset_btn", "Reset")}
+            {f(t, "theme_reset_btn", "Reset to defaults")}
           </button>
         </div>
       </div>
@@ -854,7 +979,7 @@ function BusinessTab() {
       )}
 
       <SectionCard title={f(t, "business_contact", "Business Contact & Invoice QR")} icon="contact_page">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label={f(t, "phone", "Phone")}>
             <input value={contact.phone} onChange={(e) => setContact((p) => ({ ...p, phone: e.target.value }))} />
           </Field>
@@ -1002,6 +1127,9 @@ function LicenseTab() {
         if (d) setYearSel(d.licensed_year);
       })
       .catch(() => {});
+    // Every date picker in the app caps itself at the licensed year, so re-read
+    // the shared cap here rather than leaving them stale until a page reload.
+    refreshLicenseLimits();
   }, []);
 
   const load = useCallback(() => {
@@ -1049,6 +1177,7 @@ function LicenseTab() {
       );
       setRedeemKey("");
       if (canGenerate) refreshStatus();
+      else refreshLicenseLimits();
       const okMsg = `${f(t, "year", "Year")} ${r.year} ${f(t, "activated", "activated")}`;
       setRedeemMsg({ ok: true, m: okMsg });
       toast.success(okMsg);
@@ -1089,7 +1218,22 @@ function LicenseTab() {
           {f(t, "licensed_until", "Licensed until year")}:{" "}
           <span className="font-semibold text-ink">{status?.licensed_year ?? "—"}</span>
         </div>
-        <div className="flex items-end gap-3">
+        {/* The cap is enforced on every write, not just in the pickers — spell
+            out the last day it allows so it reads as a hard limit. */}
+        {status && (
+          <div className="text-xs text-muted flex items-center gap-1.5">
+            <span className="msr text-[14px]">lock_clock</span>
+            {licenseCapNote((k) => t(k), {
+              licensed_year: status.licensed_year,
+              current_year: status.current_year,
+              max_date: `${status.licensed_year}-12-31`,
+              next_year: status.licensed_year + 1,
+              days_left: 0,
+              renewal_due: false,
+            })}
+          </div>
+        )}
+        <div className="flex items-end gap-3 flex-wrap">
           <Field label={f(t, "unlock_year", "Unlock year")}>
             <select value={yearSel} onChange={(e) => setYearSel(+e.target.value)}>
               {(status?.year_options || []).map((y) => (
@@ -1117,7 +1261,7 @@ function LicenseTab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {canGenerate && (
           <SectionCard title={f(t, "generate_key", "Generate License Key")} icon="vpn_key">
-            <div className="flex items-end gap-3">
+            <div className="flex items-end gap-3 flex-wrap">
               <Field label={f(t, "col_year", "Year")}>
                 <select value={genYear} onChange={(e) => setGenYear(+e.target.value)}>
                   {Array.from({ length: 11 }, (_, i) => thisYear + i).map((y) => (
@@ -1156,7 +1300,7 @@ function LicenseTab() {
             <div className="text-xs text-muted">
               {f(t, "redeem_help", "Enter the license key your super-admin sent you to activate the next year's calendar.")}
             </div>
-            <div className="flex items-end gap-3">
+            <div className="flex items-end gap-3 flex-wrap">
               <Field label={f(t, "license_key", "License Key")} full>
                 <input
                   value={redeemKey}
@@ -1191,7 +1335,7 @@ function LicenseTab() {
             {f(t, "add_btn", "Add")}
           </button>
         </div>
-        <div className="overflow-x-auto">
+        <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-muted border-b border-line">
@@ -1249,7 +1393,7 @@ function LicenseTab() {
             {smtpConfigured ? f(t, "configured", "Configured") : f(t, "not_configured", "Not configured")}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label={f(t, "smtp_host", "Host")}>
             <input value={smtp.host} onChange={(e) => setSmtp((p) => ({ ...p, host: e.target.value }))} />
           </Field>
@@ -1352,7 +1496,7 @@ function LicenseForm({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label={f(t, "licensee", "Licensee")} full>
           <input value={v.licensee} onChange={(e) => set("licensee", e.target.value)} />
         </Field>
@@ -1370,10 +1514,10 @@ function LicenseForm({
           />
         </Field>
         <Field label={f(t, "purchase_date", "Purchase Date")}>
-          <input
-            type="date"
+          <DateField
             value={v.purchase_date}
-            onChange={(e) => set("purchase_date", e.target.value)}
+            onChange={(iso) => set("purchase_date", iso)}
+            ariaLabel={f(t, "purchase_date", "Purchase Date")}
           />
         </Field>
         <Field label={f(t, "notes", "Notes")} full>
@@ -1389,33 +1533,8 @@ function LicenseForm({
 }
 
 // ============================================================================
-// DATA / DANGER ZONE
+// DANGER ZONE
 // ============================================================================
-interface ChargeRow {
-  charge_id: number;
-  deal_id: string;
-  vehicle_id: string;
-  make_model: string;
-  type: string;
-  amount: number;
-  occurred_at: string;
-}
-interface CostRow {
-  cost_id: number;
-  vehicle_id: string;
-  make_model: string;
-  type: string;
-  amount: number;
-  period_date: string;
-}
-interface ClientRow {
-  customer_id: number;
-  full_name: string;
-  phone: string;
-  rental_count: number;
-  id_passport?: string;
-}
-
 function ResetButton({
   label,
   path,
@@ -1459,263 +1578,13 @@ function ResetButton({
           placeholder="RESET"
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          className="max-w-[140px]"
+          className="w-full lg:max-w-[140px]"
         />
         <button className="btn btn-danger" disabled={!armed || busy} onClick={go}>
           {busy ? "…" : f(t, "reset_btn", "Reset")}
         </button>
       </div>
       {msg && <div className="text-xs text-muted">{msg}</div>}
-    </div>
-  );
-}
-
-function ClientEditForm({
-  client,
-  onDone,
-}: {
-  client: ClientRow;
-  onDone: () => void;
-}) {
-  const t = useT();
-  const toast = useToast();
-  const [name, setName] = useState(client.full_name || "");
-  const [phone, setPhone] = useState(client.phone || "");
-  const [idp, setIdp] = useState(client.id_passport || "");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function submit() {
-    if (!name.trim()) {
-      setErr(f(t, "fields_required", "Fields required"));
-      return;
-    }
-    setBusy(true);
-    setErr("");
-    try {
-      await apiPut(`/api/customers/${client.customer_id}`, {
-        full_name: name,
-        phone,
-        id_passport: idp,
-      });
-      toast.success(f(t, "customer_updated", "Customer updated."));
-      onDone();
-    } catch (e: any) {
-      setErr(t(e?.key || "error"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <Field label={f(t, "full_name", "Full Name")} full>
-        <input className="uppercase-input" value={name} onChange={(e) => setName(e.target.value)} />
-      </Field>
-      <Field label={f(t, "phone", "Phone")} full>
-        <input className="uppercase-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
-      </Field>
-      <Field label={f(t, "id_passport", "ID / Passport")} full>
-        <input className="uppercase-input" value={idp} onChange={(e) => setIdp(e.target.value)} />
-      </Field>
-      {err && <div className="text-sm text-danger">{err}</div>}
-      <button className="btn btn-primary w-full" onClick={submit} disabled={busy}>
-        {busy ? "…" : f(t, "update_btn", "Save")}
-      </button>
-    </div>
-  );
-}
-
-function DataTab() {
-  const t = useT();
-  const toast = useToast();
-  const { lang } = useI18n();
-  const { user } = useAuth();
-  const canDelete = roleLevel(user) >= 2;
-  const [income, setIncome] = useState<ChargeRow[]>([]);
-  const [expenses, setExpenses] = useState<CostRow[]>([]);
-  const [clients, setClients] = useState<ClientRow[]>([]);
-  const [editClient, setEditClient] = useState<ClientRow | null>(null);
-
-  const load = useCallback(() => {
-    apiGet<{ income: ChargeRow[]; expenses: CostRow[] }>("/api/data/finance-records")
-      .then((d) => {
-        setIncome(d.income || []);
-        setExpenses(d.expenses || []);
-      })
-      .catch(() => {});
-    apiGet<ClientRow[]>("/api/data/clients").then(setClients).catch(() => {});
-  }, []);
-  useEffect(load, [load]);
-
-  async function delClient(c: ClientRow) {
-    if (!confirm(`${f(t, "delete_btn", "Delete")}: ${c.full_name}?`)) return;
-    try {
-      await apiDel(`/api/customers/${c.customer_id}`, { confirm: true });
-      toast.success(f(t, "customer_deleted", "Customer deleted."));
-      load();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SectionCard title={`${f(t, "income", "Income")} (${income.length})`} icon="trending_up">
-          <div className="overflow-x-auto max-h-72">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-muted border-b border-line">
-                  <th className="p-2">{f(t, "col_type", "Type")}</th>
-                  <th className="p-2">{f(t, "nav_fleet", "Vehicle")}</th>
-                  <th className="p-2 text-right">{f(t, "amount", "Amount")}</th>
-                  <th className="p-2">{f(t, "col_date", "Date")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {income.map((r) => (
-                  <tr key={r.charge_id} className="border-b border-line last:border-0">
-                    <td className="p-2">{r.type}</td>
-                    <td className="p-2 text-muted">{r.make_model || r.vehicle_id || "—"}</td>
-                    <td className="p-2 text-right">{formatEur(r.amount)}</td>
-                    <td className="p-2 text-muted">{fmtDate(r.occurred_at, lang)}</td>
-                  </tr>
-                ))}
-                {income.length === 0 && (
-                  <tr>
-                    <td className="p-2 text-muted" colSpan={4}>
-                      {f(t, "no_results", "None")}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
-
-        <SectionCard title={`${f(t, "expenses", "Expenses")} (${expenses.length})`} icon="trending_down">
-          <div className="overflow-x-auto max-h-72">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-muted border-b border-line">
-                  <th className="p-2">{f(t, "col_type", "Type")}</th>
-                  <th className="p-2">{f(t, "nav_fleet", "Vehicle")}</th>
-                  <th className="p-2 text-right">{f(t, "amount", "Amount")}</th>
-                  <th className="p-2">{f(t, "col_date", "Date")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expenses.map((r) => (
-                  <tr key={r.cost_id} className="border-b border-line last:border-0">
-                    <td className="p-2">{r.type}</td>
-                    <td className="p-2 text-muted">{r.make_model || r.vehicle_id || "—"}</td>
-                    <td className="p-2 text-right">{formatEur(r.amount)}</td>
-                    <td className="p-2 text-muted">{fmtDate(r.period_date, lang)}</td>
-                  </tr>
-                ))}
-                {expenses.length === 0 && (
-                  <tr>
-                    <td className="p-2 text-muted" colSpan={4}>
-                      {f(t, "no_results", "None")}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
-      </div>
-
-      <SectionCard title={`${f(t, "nav_customers", "Clients")} (${clients.length})`} icon="group">
-        <div className="overflow-x-auto max-h-72">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-muted border-b border-line">
-                <th className="p-2">{f(t, "full_name", "Name")}</th>
-                <th className="p-2">{f(t, "phone", "Phone")}</th>
-                <th className="p-2 text-right">{f(t, "rentals", "Rentals")}</th>
-                <th className="p-2 text-right">{f(t, "actions", "Actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map((c) => (
-                <tr key={c.customer_id} className="border-b border-line last:border-0">
-                  <td className="p-2 font-medium">{c.full_name}</td>
-                  <td className="p-2 text-muted">{c.phone || "—"}</td>
-                  <td className="p-2 text-right">{c.rental_count}</td>
-                  <td className="p-2">
-                    <div className="flex items-center gap-1.5 justify-end">
-                      <button
-                        className="btn !py-1 !px-2 text-xs"
-                        title={f(t, "edit", "Edit")}
-                        onClick={() => setEditClient(c)}
-                      >
-                        <span className="msr text-[15px]">edit</span>
-                      </button>
-                      {canDelete && (
-                        <button
-                          className="btn btn-danger !py-1 !px-2 text-xs"
-                          title={f(t, "delete_btn", "Delete")}
-                          onClick={() => delClient(c)}
-                        >
-                          <span className="msr text-[15px]">delete</span>
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {clients.length === 0 && (
-                <tr>
-                  <td className="p-2 text-muted" colSpan={4}>
-                    {f(t, "no_results", "None")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
-
-      {editClient && (
-        <Modal
-          title={`${f(t, "edit", "Edit")}: ${editClient.full_name}`}
-          onClose={() => setEditClient(null)}
-        >
-          <ClientEditForm
-            client={editClient}
-            onDone={() => {
-              setEditClient(null);
-              load();
-            }}
-          />
-        </Modal>
-      )}
-
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-danger">
-          <span className="msr text-[18px]">warning</span>
-          <h2 className="text-sm font-semibold">{f(t, "danger_zone", "Danger Zone")}</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ResetButton
-            label={f(t, "reset_finance", "Reset Finance Records")}
-            path="/api/data/reset/finance"
-            onDone={load}
-          />
-          <ResetButton
-            label={f(t, "reset_clients", "Reset Clients")}
-            path="/api/data/reset/clients"
-            onDone={load}
-          />
-          <ResetButton
-            label={f(t, "reset_fleet", "Reset Fleet")}
-            path="/api/data/reset/fleet"
-            onDone={load}
-          />
-        </div>
-      </div>
     </div>
   );
 }
@@ -1739,6 +1608,41 @@ interface ReturnableItem {
   label: string;
 }
 
+// vehicle_id -> "PLATE — Make/Model" (falls back to just make/model if no plate)
+function vehicleTag(make_model: string, license_plate?: string | null): string {
+  return license_plate ? `${license_plate} — ${make_model}` : make_model;
+}
+
+// Activity rows only carry an entity + entity_id (e.g. rental · RENT-202607-011).
+// These maps resolve that id to the client name / vehicle plate+model shown next
+// to it, reusing the existing customers/rentals/vehicles endpoints — no new
+// backend support needed.
+function useActivityLookups() {
+  const [customerNames, setCustomerNames] = useState<Map<string, string>>(new Map());
+  const [vehicleTags, setVehicleTags] = useState<Map<string, string>>(new Map());
+  const [rentalInfo, setRentalInfo] = useState<Map<string, { client: string; vehicle: string }>>(new Map());
+
+  useEffect(() => {
+    apiGet<{ customer_id: number; full_name: string }[]>("/api/customers")
+      .then((rows) => setCustomerNames(new Map(rows.map((c) => [String(c.customer_id), c.full_name]))))
+      .catch(() => {});
+    apiGet<{ vehicle_id: string; make_model: string; license_plate?: string | null }[]>("/api/vehicles/active")
+      .then((rows) => setVehicleTags(new Map(rows.map((v) => [v.vehicle_id, vehicleTag(v.make_model, v.license_plate)]))))
+      .catch(() => {});
+    apiGet<
+      { deal_id: string; client_name: string; make_model: string; license_plate?: string | null }[]
+    >("/api/rentals/all")
+      .then((rows) =>
+        setRentalInfo(
+          new Map(rows.map((r) => [r.deal_id, { client: r.client_name, vehicle: vehicleTag(r.make_model, r.license_plate) }]))
+        )
+      )
+      .catch(() => {});
+  }, []);
+
+  return { customerNames, vehicleTags, rentalInfo };
+}
+
 function ActivityTab() {
   const t = useT();
   const [rows, setRows] = useState<ActivityRow[]>([]);
@@ -1749,6 +1653,7 @@ function ActivityTab() {
   const [actionF, setActionF] = useState("");
   const [userF, setUserF] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
+  const { customerNames, vehicleTags, rentalInfo } = useActivityLookups();
 
   const loadActivity = useCallback(() => {
     apiGet<{ rows: ActivityRow[]; actions: string[]; users: string[] }>("/api/activity")
@@ -1850,6 +1755,7 @@ function ActivityTab() {
               <th className="p-3">{f(t, "user", "User")}</th>
               <th className="p-3">{f(t, "col_action", "Action")}</th>
               <th className="p-3">{f(t, "entity", "Entity")}</th>
+              <th className="p-3">{f(t, "col_client_vehicle", "Client / Vehicle")}</th>
               <th className="p-3">{f(t, "detail", "Detail")}</th>
               <th className="p-3 text-right">{f(t, "actions", "Actions")}</th>
             </tr>
@@ -1857,6 +1763,9 @@ function ActivityTab() {
           <tbody>
             {filtered.map((r) => {
               const kind = r.entity_id ? returnableByEntity.get(r.entity_id) : undefined;
+              const rental = r.entity === "rental" ? rentalInfo.get(r.entity_id) : undefined;
+              const vehicleName = r.entity === "vehicle" ? vehicleTags.get(r.entity_id) : undefined;
+              const customerName = r.entity === "customer" ? customerNames.get(r.entity_id) : undefined;
               return (
                 <tr key={r.id} className="border-b border-line last:border-0">
                   <td className="p-3 text-muted whitespace-nowrap font-mono text-xs">{r.ts}</td>
@@ -1865,6 +1774,9 @@ function ActivityTab() {
                   <td className="p-3 text-muted">
                     {r.entity}
                     {r.entity_id ? ` · ${r.entity_id}` : ""}
+                  </td>
+                  <td className="p-3 text-muted">
+                    {rental ? `${rental.client} · ${rental.vehicle}` : vehicleName || customerName || "—"}
                   </td>
                   <td className="p-3 text-muted">{r.detail || "—"}</td>
                   <td className="p-3 text-right">
@@ -1883,7 +1795,7 @@ function ActivityTab() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td className="p-3 text-muted" colSpan={6}>
+                <td className="p-3 text-muted" colSpan={7}>
                   {f(t, "no_results", "No activity")}
                 </td>
               </tr>
@@ -2055,6 +1967,18 @@ function BackupTab() {
       <div className="lg:col-span-2">
         <Notice ok={msg.ok} msg={msg.m} />
       </div>
+
+      <div className="lg:col-span-2 space-y-2">
+        <div className="flex items-center gap-2 text-danger">
+          <span className="msr text-[18px]">warning</span>
+          <h2 className="text-sm font-semibold">{f(t, "danger_zone", "Danger Zone")}</h2>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <ResetButton label={f(t, "reset_finance", "Reset Finance Records")} path="/api/data/reset/finance" onDone={() => {}} />
+          <ResetButton label={f(t, "reset_clients", "Reset Clients")} path="/api/data/reset/clients" onDone={() => {}} />
+          <ResetButton label={f(t, "reset_fleet", "Reset Fleet")} path="/api/data/reset/fleet" onDone={() => {}} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -2062,7 +1986,7 @@ function BackupTab() {
 // ============================================================================
 // PAGE — tab shell
 // ============================================================================
-type TabId = "profile" | "users" | "business" | "license" | "data" | "activity" | "backup";
+type TabId = "profile" | "users" | "roles" | "business" | "license" | "activity" | "backup";
 
 export default function SettingsPage() {
   const t = useT();
@@ -2073,9 +1997,9 @@ export default function SettingsPage() {
     const list: { id: TabId; label: string; icon: string; show: boolean }[] = [
       { id: "profile", label: f(t, "tab_profile", "Profile"), icon: "person", show: true },
       { id: "users", label: f(t, "tab_users", "Users"), icon: "group", show: can(user, "manage_users") },
+      { id: "roles", label: f(t, "tab_roles", "Roles"), icon: "admin_panel_settings", show: can(user, "manage_users") },
       { id: "business", label: f(t, "tab_business", "Business"), icon: "storefront", show: can(user, "manage_users") },
       { id: "license", label: f(t, "tab_license", "License"), icon: "workspace_premium", show: roleLevel(user) >= 2 },
-      { id: "data", label: f(t, "tab_data", "Data"), icon: "database", show: can(user, "edit_business_settings") },
       { id: "backup", label: f(t, "tab_backup", "Backup"), icon: "backup", show: can(user, "backup_database") },
       { id: "activity", label: f(t, "tab_activity", "Activity"), icon: "history", show: can(user, "manage_users") },
     ];
@@ -2094,11 +2018,17 @@ export default function SettingsPage() {
         <h1 className="text-xl font-bold">{f(t, "nav_settings", "Settings")}</h1>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-b border-line pb-2">
+      {/* Up to seven tabs. Wrapping them on a phone builds a four-row block
+          before any content appears, so below `lg` this is a single
+          horizontally-scrollable row instead. */}
+      <div
+        className="flex flex-wrap gap-1.5 border-b border-line pb-2
+                   max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:no-scrollbar"
+      >
         {tabs.map((x) => (
           <button
             key={x.id}
-            className={`btn !py-1.5 !px-3 text-xs ${
+            className={`btn !py-1.5 !px-3 text-xs max-lg:shrink-0 max-lg:whitespace-nowrap ${
               tab === x.id ? "btn-primary" : "!bg-transparent !border-transparent"
             }`}
             onClick={() => setTab(x.id)}
@@ -2111,9 +2041,9 @@ export default function SettingsPage() {
 
       {tab === "profile" && <ProfileTab />}
       {tab === "users" && can(user, "manage_users") && <UsersTab />}
+      {tab === "roles" && can(user, "manage_users") && <AdminPanel />}
       {tab === "business" && can(user, "manage_users") && <BusinessTab />}
       {tab === "license" && roleLevel(user) >= 2 && <LicenseTab />}
-      {tab === "data" && can(user, "edit_business_settings") && <DataTab />}
       {tab === "backup" && can(user, "backup_database") && <BackupTab />}
       {tab === "activity" && can(user, "manage_users") && <ActivityTab />}
     </div>

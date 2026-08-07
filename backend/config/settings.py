@@ -30,9 +30,6 @@ PAGE_ICON = "🚗"
 LANGUAGES = {
     "tr": "🇹🇷 Türkçe",
     "en": "🇬🇧 English",
-    "de": "🇩🇪 Deutsch",
-    "it": "🇮🇹 Italiano",
-    "es": "🇪🇸 Español",
     "sq": "🇦🇱 Shqip",
 }
 STAFF_ONLY_LANGS = {"sq"}

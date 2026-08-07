@@ -24,6 +24,7 @@ export function SwipeCard({
   chip,
   chipTitle,
   initials,
+  image,
   children,
 }: {
   name: string;
@@ -32,10 +33,13 @@ export function SwipeCard({
   chipTitle?: string;
   /** Override the avatar text (defaults to the first letters of `name`). */
   initials?: string;
+  /** Optional photo strip rendered above the header band (e.g. a vehicle photo). */
+  image?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="swipe-card h-full flex flex-col">
+      {image}
       <div className="swipe-band">
         <div className="swipe-avatar">{initials ?? initialsOf(name)}</div>
         <div className="min-w-0 flex-1">

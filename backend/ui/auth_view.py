@@ -111,14 +111,10 @@ def _render_login(cookie_mgr):
                 st.caption(t("recover_help"))
                 ru = st.text_input(t("login_username"), key="recover_user")
                 if st.button(t("recover_btn"), key="recover_go", type="primary"):
-                    ok, msg, info = auth.self_recover(ru)
-                    if ok and info.get("sent"):
-                        st.success(t("recover_sent").format(to=info["recipient"]))
-                    elif ok:
-                        st.warning(t("recover_fallback").format(
-                            pw=info["new_password"], to=info["recipient"]))
-                    else:
-                        st.error(t(msg))
+                    # Mails a single-use reset link; never reveals whether the
+                    # account exists, so the confirmation is unconditional.
+                    auth.request_password_reset(ru)
+                    st.success(t("recover_sent_generic"))
 
 
 def logout(cookie_mgr, cookies: dict):

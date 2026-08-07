@@ -5,12 +5,19 @@ import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
+import { usePolling } from "@/lib/usePolling";
 import { Timeline } from "@/components/Timeline";
 import { NightModeToggle } from "@/components/NightModeToggle";
+import { RefreshIcon } from "@/components/RefreshIcon";
 import { Modal } from "@/components/Modal";
+import { DateField } from "@/components/DateField";
+import { useLicenseMax } from "@/lib/license";
 import { BookingDialog } from "@/components/BookingDialog";
 import { StatusBadge } from "@/components/StatusBadge";
-import { SwipeDeck } from "@/components/SwipeCard";
+import { RecordCard, RecordCardList } from "@/components/RecordCard";
+import { SwipeDeck, SwipePanel } from "@/components/SwipeCard";
+import { VehicleCard, AvailabilityChip } from "@/components/VehicleCard";
+import { VehicleThumb } from "@/components/VehicleThumb";
 import { VisitorHome } from "@/components/VisitorHome";
 import type { FleetCounts, Vehicle } from "@/lib/types";
 
@@ -39,12 +46,18 @@ export default function DashboardPage() {
   const [dateOpen, setDateOpen] = useState(false);
   const [draftStart, setDraftStart] = useState("");
   const [draftEnd, setDraftEnd] = useState("");
+  // Availability can only be asked about days the licence covers — the endpoint
+  // refuses the rest, so the picker doesn't offer them.
+  const licenseMax = useLicenseMax();
 
-  const load = () => apiGet<Vehicle[]>("/api/vehicles").then(setVehicles).catch(() => {});
-  useEffect(() => {
-    apiGet<FleetCounts>("/api/vehicles/counts").then(setCounts).catch(() => {});
-    load();
-  }, []);
+  const load = async () => {
+    await Promise.all([
+      apiGet<FleetCounts>("/api/vehicles/counts").then(setCounts).catch(() => {}),
+      apiGet<Vehicle[]>("/api/vehicles").then(setVehicles).catch(() => {}),
+    ]);
+  };
+
+  const { isLoading, refetch } = usePolling(load, { interval: 15000 });
 
   const available = vehicles.filter((v) => v.status === "Available");
 
@@ -97,29 +110,54 @@ export default function DashboardPage() {
 
   // Availability cards use the shared SwipeDeck (drag + seamless loop) once a date
   // window is picked; see the `startDate` branch below.
+  const carPlaceholder = (
+    <div className="h-[150px] w-full rounded-[14px] bg-bg border border-line flex items-center justify-center text-muted">
+      <span className="msr text-[34px]">directions_car</span>
+    </div>
+  );
   const renderCarCard = (v: Vehicle) => (
-    <>
-      <div className="h-[120px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted">
-        <span className="msr text-[34px]">directions_car</span>
-      </div>
-      <div className="font-semibold text-ink">
-        {v.make_model}
-        {v.year ? ` · ${v.year}` : ""}
-      </div>
-      <div className="text-xs text-muted flex items-center gap-1">
-        <span className="msr text-[14px]">directions_car</span>
-        {v.vehicle_id} · {v.license_plate || "—"}
-      </div>
-      <div className="font-bold text-accent">
-        {formatEur(v.base_daily_rate)} <span className="text-xs text-muted font-normal">/ day</span>
-      </div>
-      {canBook && (
-        <button className="btn btn-primary w-full" onClick={() => setBookingCar(v.vehicle_id)}>
-          <span className="msr text-[18px]">add</span>
-          {tf("rent", "Rent")}
-        </button>
-      )}
-    </>
+    <VehicleCard
+      name={v.make_model}
+      photo={
+        <VehicleThumb
+          vehicleId={v.vehicle_id}
+          className="h-[150px] w-full object-cover rounded-[14px]"
+          fallback={carPlaceholder}
+        />
+      }
+      reference={
+        <>
+          {v.year || "—"} · {v.license_plate || "—"}
+          {v.color ? ` · ${v.color}` : ""}
+          {v.mileage != null ? ` · ${v.mileage.toLocaleString()} km` : ""}
+        </>
+      }
+      status={<AvailabilityChip status={v.status} />}
+      price={
+        <SwipePanel>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <span className="msr text-[16px] text-muted">sell</span>
+              <span className="text-xs text-muted">{tf("from", "from")}</span>
+              <span className="font-display font-bold text-base text-accent">
+                {formatEur(v.base_daily_rate)}
+              </span>
+            </span>
+            <span className="text-[0.6rem] uppercase text-muted tracking-wide">
+              / {tf("day", "day")}
+            </span>
+          </div>
+        </SwipePanel>
+      }
+      footer={
+        canBook ? (
+          <button className="btn-rent" onClick={() => setBookingCar(v.vehicle_id)}>
+            <span className="msr text-[18px]">add</span>
+            {tf("rent", "Rent")}
+          </button>
+        ) : undefined
+      }
+    />
   );
   const isStaff = can(user, "view_management");
   const ql = q.trim().toLowerCase();
@@ -144,7 +182,10 @@ export default function DashboardPage() {
           </h1>
           <p className="text-sm text-muted mt-1">{t("dashboard_help")}</p>
         </div>
-        <NightModeToggle />
+        <div className="flex items-center gap-2">
+          <RefreshIcon onClick={refetch} isLoading={isLoading} />
+          <NightModeToggle />
+        </div>
       </div>
 
       <section className="space-y-2.5">
@@ -163,10 +204,14 @@ export default function DashboardPage() {
           <span className="msr text-[18px]">dashboard</span>
           {tf("fleet_at_a_glance", "Fleet at a glance")}
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 [grid-auto-rows:minmax(140px,auto)]">
+        {/* 4 columns on a phone, 8 on a tablet, the original 4 from `lg` up.
+            Every tile below carries an explicit `lg:` span, because Tailwind
+            breakpoints are min-width — without one, the `md:` span written for
+            the tablet tier would leak upward and change the desktop board. */}
+        <div className="grid grid-cols-4 md:grid-cols-8 lg:grid-cols-4 gap-4 [grid-auto-rows:minmax(140px,auto)]">
           {/* Hero — availability + utilization */}
           <div
-            className="bento-in card col-span-2 row-span-2 p-6 flex flex-col justify-between"
+            className="bento-in card col-span-4 md:col-span-4 lg:col-span-2 row-span-2 p-5 lg:p-6 flex flex-col justify-between"
             style={{ background: "var(--accent)", color: "var(--bg)", border: "none" }}
           >
             <div className="flex items-center gap-2 text-sm" style={{ opacity: 0.75 }}>
@@ -176,7 +221,7 @@ export default function DashboardPage() {
             <div>
               <div className="flex items-end gap-2.5">
                 <span
-                  className="text-6xl font-bold leading-none"
+                  className="text-5xl lg:text-6xl font-bold leading-none"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
                   {avail}
@@ -201,7 +246,10 @@ export default function DashboardPage() {
           </div>
 
           {/* Rented */}
-          <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "45ms" }}>
+          <div
+            className="bento-in card col-span-2 md:col-span-2 lg:col-span-1 p-5 flex flex-col justify-center"
+            style={{ animationDelay: "45ms" }}
+          >
             <div className="flex items-center gap-1.5 text-xs text-muted">
               <span className="msr text-[16px]">vpn_key</span>
               {t("kpi_rented")}
@@ -212,7 +260,10 @@ export default function DashboardPage() {
           </div>
 
           {/* Available (stat) */}
-          <div className="bento-in card p-5 flex flex-col justify-center" style={{ animationDelay: "90ms" }}>
+          <div
+            className="bento-in card col-span-2 md:col-span-2 lg:col-span-1 p-5 flex flex-col justify-center"
+            style={{ animationDelay: "90ms" }}
+          >
             <div className="flex items-center gap-1.5 text-xs text-muted">
               <span className="msr text-[16px]">check_circle</span>
               {t("kpi_available")}
@@ -223,7 +274,10 @@ export default function DashboardPage() {
           </div>
 
           {/* Garage / maintenance — wide */}
-          <div className="bento-in card col-span-2 p-5 flex items-center gap-4" style={{ animationDelay: "135ms" }}>
+          <div
+            className="bento-in card col-span-4 md:col-span-4 lg:col-span-2 p-5 flex items-center gap-4"
+            style={{ animationDelay: "135ms" }}
+          >
             <div className="w-11 h-11 rounded-full bg-bg border border-line flex items-center justify-center shrink-0">
               <span className="msr text-[22px] text-muted">build</span>
             </div>
@@ -238,11 +292,11 @@ export default function DashboardPage() {
           {/* Featured available car — full-width feature strip */}
           {featured ? (
             <div
-              className="bento-in card col-span-2 md:col-span-4 p-4 flex flex-row items-center gap-4"
+              className="bento-in card col-span-4 md:col-span-8 lg:col-span-4 p-4 flex flex-row items-center gap-4"
               style={{ animationDelay: "180ms" }}
             >
-              <div className="w-[96px] h-[80px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted shrink-0">
-                <span className="msr text-[36px]">directions_car</span>
+              <div className="w-[72px] h-[64px] lg:w-[96px] lg:h-[80px] rounded-[10px] bg-bg border border-line flex items-center justify-center text-muted shrink-0">
+                <span className="msr text-[30px] lg:text-[36px]">directions_car</span>
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-[11px] uppercase tracking-wide text-muted">
@@ -269,7 +323,7 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div
-              className="bento-in card col-span-2 md:col-span-4 p-5 flex items-center justify-center text-sm text-muted"
+              className="bento-in card col-span-4 md:col-span-8 lg:col-span-4 p-5 flex items-center justify-center text-sm text-muted"
               style={{ animationDelay: "180ms" }}
             >
               {t("no_cars")}
@@ -337,17 +391,17 @@ export default function DashboardPage() {
             items={shownCars}
             keyOf={(v) => v.vehicle_id}
             render={(v) => renderCarCard(v)}
-            cardClassName="card p-3 space-y-2"
-            itemWidth="w-[260px] sm:w-[280px]"
+            // One full-bleed card per view on a phone. The literal 260px opted
+            // this deck out of SwipeDeck's own responsive sizing, so a card was
+            // wider than the viewport's content box. `sm:` up is unchanged.
+            itemWidth="w-[calc(100vw-1.5rem)] sm:w-[280px]"
             gap={12}
             empty={<div className="text-sm text-muted">{t("no_cars")}</div>}
           />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {shownCars.map((v) => (
-              <div key={v.vehicle_id} className="card p-3 space-y-2">
-                {renderCarCard(v)}
-              </div>
+              <div key={v.vehicle_id}>{renderCarCard(v)}</div>
             ))}
           </div>
         )}
@@ -364,10 +418,30 @@ export default function DashboardPage() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={t("search")}
-            className="!py-1.5 text-xs max-w-[220px]"
+            className="!py-1.5 text-xs w-full lg:max-w-[220px]"
           />
         </div>
-        <div className="card overflow-x-auto">
+        {/* Below `lg` the same rows render as stacked cards — six columns of
+            table never fit a phone, and a horizontal scroller hides half the
+            fleet behind a gesture. Same `fleetShown` array feeds both. */}
+        <RecordCardList>
+          {fleetShown.map((v) => (
+            <RecordCard
+              key={v.vehicle_id}
+              title={v.make_model}
+              subtitle={v.vehicle_id}
+              badge={<StatusBadge status={v.status} />}
+              fields={[
+                { label: t("col_plate"), value: v.license_plate || "—" },
+                { label: t("col_rate"), value: formatEur(v.base_daily_rate) },
+                { label: t("col_year"), value: v.year || "—" },
+                { label: t("col_color"), value: v.color || "—" },
+              ]}
+            />
+          ))}
+        </RecordCardList>
+
+        <div className="card overflow-x-auto hidden lg:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-muted border-b border-line">
@@ -412,17 +486,17 @@ export default function DashboardPage() {
                   <span className="msr text-[15px]">event</span>
                   {tf("date_from", "From")}
                 </span>
-                <input
-                  type="date"
+                <DateField
                   value={draftStart}
-                  max={draftEnd || undefined}
-                  onChange={(e) => {
-                    const v = e.target.value;
+                  max={draftEnd || licenseMax}
+                  rangeStart={draftStart}
+                  rangeEnd={draftEnd}
+                  onChange={(v) => {
                     setDraftStart(v);
                     // Drop an end date that now precedes the new start.
                     if (draftEnd && v && draftEnd < v) setDraftEnd("");
                   }}
-                  className="w-full"
+                  ariaLabel={tf("date_from", "From")}
                 />
               </label>
               <label className="block space-y-1">
@@ -430,13 +504,15 @@ export default function DashboardPage() {
                   <span className="msr text-[15px]">event</span>
                   {tf("date_to", "To")}
                 </span>
-                <input
-                  type="date"
+                <DateField
                   value={draftEnd}
                   min={draftStart || undefined}
+                  max={licenseMax}
                   disabled={!draftStart}
-                  onChange={(e) => setDraftEnd(e.target.value)}
-                  className="w-full"
+                  rangeStart={draftStart}
+                  rangeEnd={draftEnd}
+                  onChange={setDraftEnd}
+                  ariaLabel={tf("date_to", "To")}
                 />
               </label>
             </div>
@@ -478,7 +554,13 @@ export default function DashboardPage() {
       )}
 
       {bookingCar && canBook && (
-        <Modal title={t("quick_register")} onClose={() => setBookingCar(null)} wide>
+        <Modal
+          title={t("quick_register")}
+          onClose={() => setBookingCar(null)}
+          size="full"
+          fullHeight
+          bodyClassName="!mt-4 !mb-4 !p-4"
+        >
           <BookingDialog
             preselectVehicleId={bookingCar}
             onClose={() => setBookingCar(null)}

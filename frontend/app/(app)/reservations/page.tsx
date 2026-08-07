@@ -4,14 +4,22 @@ import { api, apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
+import { usePolling } from "@/lib/usePolling";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { Timeline } from "@/components/Timeline";
 import { BookingDialog } from "@/components/BookingDialog";
-import { ReservationCard, type ActiveRental } from "@/components/ReservationCard";
+import {
+  ReservationCard,
+  EditReservationForm,
+  ManageReturnForm,
+  type ActiveRental,
+} from "@/components/ReservationCard";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
+import { RefreshIcon } from "@/components/RefreshIcon";
+import { ViewToggle } from "@/components/ViewToggle";
+import { useResponsiveView } from "@/lib/useResponsiveView";
 import { SwipeDeck } from "@/components/SwipeCard";
 
 type TLRange = "week" | "month" | "two_month" | "all_months";
@@ -27,25 +35,17 @@ export default function ReservationsPage() {
   const [range, setRange] = useState<TLRange>("week");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<ViewMode>("cards");
+  // Table view is desktop-only — below `lg` this always resolves to "cards".
+  const [view, changeView] = useResponsiveView("reservations_view");
+  // Table-view row actions open the same focused modals the cards use.
   const [manage, setManage] = useState<ActiveRental | null>(null);
+  const [edit, setEdit] = useState<ActiveRental | null>(null);
 
-  const load = useCallback(() => {
-    apiGet<ActiveRental[]>("/api/rentals/active").then(setRentals).catch(() => {});
+  const load = useCallback(async () => {
+    await apiGet<ActiveRental[]>("/api/rentals/active").then(setRentals).catch(() => {});
   }, []);
-  useEffect(() => {
-    load();
-  }, [load]);
 
-  // Remember the chosen view across visits.
-  useEffect(() => {
-    const v = localStorage.getItem("reservations_view");
-    if (v === "cards" || v === "table") setView(v);
-  }, []);
-  const changeView = (v: ViewMode) => {
-    setView(v);
-    localStorage.setItem("reservations_view", v);
-  };
+  const { isLoading, refetch } = usePolling(load, { interval: 15000 });
 
   const fmtDay = (s: string) => {
     const d = new Date((s || "").replace(" ", "T"));
@@ -103,6 +103,7 @@ export default function ReservationsPage() {
           <h1 className="text-xl font-bold">{t("nav_reservations")}</h1>
         </div>
         <div className="flex items-center gap-2">
+          <RefreshIcon onClick={refetch} isLoading={isLoading} />
           <ViewToggle
             value={view}
             onChange={changeView}
@@ -192,14 +193,24 @@ export default function ReservationsPage() {
                       <StatusBadge status={r.status} />
                     </td>
                     <td className="p-2.5 text-right">
-                      <button
-                        className="btn !py-1.5 !px-3 text-xs"
-                        onClick={() => setManage(r)}
-                        title={tf("manage_return", "Manage / Return")}
-                      >
-                        <span className="msr text-[16px]">tune</span>
-                        {tf("manage", "Manage")}
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          className="btn !py-1.5 !px-3 text-xs"
+                          onClick={() => setEdit(r)}
+                          title={tf("edit_reservation", "Edit Reservation")}
+                        >
+                          <span className="msr text-[16px]">edit</span>
+                          {tf("edit", "Edit")}
+                        </button>
+                        <button
+                          className="btn !py-1.5 !px-3 text-xs"
+                          onClick={() => setManage(r)}
+                          title={tf("manage_return", "Manage / Return")}
+                        >
+                          <span className="msr text-[16px]">tune</span>
+                          {tf("manage", "Manage")}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -226,14 +237,34 @@ export default function ReservationsPage() {
         <Timeline />
       </section>
 
+      {edit && (
+        <Modal
+          title={`${tf("edit_reservation", "Edit Reservation")} · ${edit.client_name}`}
+          onClose={() => setEdit(null)}
+          wide
+        >
+          <EditReservationForm rental={edit} onChange={load} onClose={() => setEdit(null)} />
+        </Modal>
+      )}
+
       {manage && (
-        <Modal title={manage.client_name} onClose={() => setManage(null)} wide>
-          <ReservationCard rental={manage} onChange={load} />
+        <Modal
+          title={`${tf("manage_return", "Manage / Return")} · ${manage.client_name}`}
+          onClose={() => setManage(null)}
+          wide
+        >
+          <ManageReturnForm rental={manage} onChange={load} onClose={() => setManage(null)} />
         </Modal>
       )}
 
       {booking && (
-        <Modal title={t("quick_register")} onClose={() => setBooking(false)} wide>
+        <Modal
+          title={t("quick_register")}
+          onClose={() => setBooking(false)}
+          size="full"
+          fullHeight
+          bodyClassName="!mt-4 !mb-4 !p-4"
+        >
           <BookingDialog onClose={() => setBooking(false)} onCreated={load} />
         </Modal>
       )}

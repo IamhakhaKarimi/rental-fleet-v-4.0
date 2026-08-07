@@ -13,7 +13,41 @@ Rental-Fleet-V.4.0/
 Full developer reference: **[`DOCUMENTATION.md`](DOCUMENTATION.md)** · Claude Code
 guidance: **[`CLAUDE.md`](CLAUDE.md)** · end-to-end deploy runbook: **[`DEPLOY.md`](DEPLOY.md)**.
 
-## Run locally
+## Run it (Windows)
+
+Double-click **`start.bat`**. It opens the launcher in your browser, where two buttons
+decide who can reach the app:
+
+| Button | Binds | Who can use it |
+|---|---|---|
+| **This PC only** | `127.0.0.1` | just this computer (`next dev`, fast reloads) |
+| **Local WiFi network** | `0.0.0.0` | anyone on the same wifi (production build, comfortable for ~5 staff) |
+
+In LAN mode the launcher shows the address to hand out — `http://<your-ip>:3000` — plus
+a QR code for phones. Staff need **only a browser**; nothing is installed on their
+machines. The first LAN start runs `next build` once (a couple of minutes); the build is
+IP-independent and reused afterwards.
+
+Two things to know:
+
+- **Windows Firewall** blocks ports 3000/8001 until you click *Allow through Windows
+  Firewall* on the launcher and accept the UAC prompt. It adds `profile=private` rules
+  only, so the app stays invisible on public wifi.
+- **The host PC must stay awake** — it is the server. There is no internet access,
+  no port forwarding: same router only.
+
+`stop.bat` is the fallback if the launcher window is gone. See
+[`DOCUMENTATION.md`](DOCUMENTATION.md#running-on-the-local-network) for the details.
+
+### Do I need Postgres for multiple users?
+
+No. SQLite handles one writer with many concurrent readers, and ~5 staff doing bookings
+and invoices is nowhere near that limit. Keep `backend/fleet.db` **on the host's local
+disk** — never a network share or a OneDrive/Dropbox-synced folder, where concurrent
+writes can corrupt it. Move to Postgres only when you need multiple locations or
+off-site access, which is what [`DEPLOY.md`](DEPLOY.md) covers.
+
+## Run locally (manual, two terminals)
 ```bash
 # Backend (SQLite, self-seeds on first run; login admin/admin)
 cd backend

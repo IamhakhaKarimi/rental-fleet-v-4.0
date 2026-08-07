@@ -30,6 +30,7 @@ env/
 # ───────────── Node / Next.js (frontend) ─────────────
 node_modules/
 .next/
+.next-dev/
 out/
 build/
 dist/

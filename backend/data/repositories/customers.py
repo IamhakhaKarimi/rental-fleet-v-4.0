@@ -1,17 +1,39 @@
 """Customers repository."""
+import re
+
 from sqlalchemy import text
 from core.db import get_engine
 
 
+def _digits(phone: str) -> str:
+    """Strip everything but digits, so '+355 69-123 4567' and '0691234567'
+    are recognized as the same phone number for customer matching."""
+    return re.sub(r"\D", "", phone or "")
+
+
 def get_or_create_customer(full_name: str, phone: str, id_passport: str) -> int:
+    """Look up an existing customer before inserting a new row.
+
+    Matches on full_name (exact, post-normalization by the caller) AND on the
+    phone number's digits only — so formatting differences (spaces, dashes,
+    a leading country code) between bookings for the same person don't create
+    a second `customers` row. A second row would silently split that client's
+    history and revenue across two entries (see revenue_by_customer in
+    finance_service.py, which groups by customer_id).
+    """
     full_name = (full_name or "").strip()
     phone = (phone or "").strip()
     id_passport = (id_passport or "").strip()
+    phone_digits = _digits(phone)
     with get_engine().begin() as conn:
-        existing = conn.execute(
-            text("SELECT customer_id FROM customers WHERE full_name=:n AND phone=:p"),
-            {"n": full_name, "p": phone}
-        ).scalar()
+        candidates = conn.execute(
+            text("SELECT customer_id, phone FROM customers WHERE full_name=:n"),
+            {"n": full_name}
+        ).all()
+        existing = next(
+            (cid for cid, cphone in candidates if _digits(cphone) == phone_digits),
+            None
+        )
         if existing is not None:
             return int(existing)
         result = conn.execute(

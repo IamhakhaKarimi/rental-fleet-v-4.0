@@ -36,6 +36,8 @@ _NAV = [
     ("fleet", "nav_fleet", "directions_car", "view_management"),
     ("customers", "nav_customers", "group", "view_management"),
     ("finance", "nav_finance", "payments", "view_finance"),
+    # The Admin Panel (staff accounts + the role/permission matrix) is not a nav
+    # entry: it lives in Settings -> Roles, alongside the other admin screens.
 ]
 
 

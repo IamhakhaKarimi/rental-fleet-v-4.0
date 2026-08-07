@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="launcher-token" content="__LAUNCHER_TOKEN__" />
 <title>Balkan Car Rentals — Fleet Console v4.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,11 +12,11 @@
   :root{
     --bg:#FAFAF9; --surface:#F4F3F1; --text:#1A1C1E; --muted:#6B7280;
     --border:#EAE8E3; --accent:#1A1C1E; --accent-hover:#3F3F46;
-    --ok:#1F9D55; --danger:#DC2626; --warn:#71717A;
+    --ok:#1F9D55; --danger:#DC2626; --warn:#71717A; --amber:#B45309;
     --neo-light:#ffffff; --neo-dark:#e4e2dc;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
+  html,body{margin:0;min-height:100%}
   body{
     background:var(--bg); color:var(--text);
     font-family:"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -23,7 +24,7 @@
     display:flex; align-items:center; justify-content:center; padding:24px;
   }
   .card{
-    width:100%; max-width:440px; background:var(--bg);
+    width:100%; max-width:470px; background:var(--bg);
     border-radius:22px; padding:30px 28px;
     box-shadow:7px 7px 18px var(--neo-dark), -7px -7px 18px var(--neo-light);
   }
@@ -35,8 +36,49 @@
   }
   .brand h1{font-size:1.15rem; font-weight:700; margin:0; line-height:1.15}
   .brand .tag{font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; color:var(--muted)}
-  .sub{color:var(--muted); font-size:.86rem; margin:14px 2px 18px}
-  .status{display:flex; flex-direction:column; gap:9px; margin-bottom:20px}
+  .sub{color:var(--muted); font-size:.86rem; margin:14px 2px 16px}
+
+  /* ---- mode chooser ---- */
+  .modes{display:grid; grid-template-columns:1fr 1fr; gap:11px; margin-bottom:13px}
+  .mode{
+    display:flex; flex-direction:column; align-items:flex-start; gap:3px;
+    padding:14px 14px 13px; border-radius:15px; cursor:pointer; text-align:left;
+    background:var(--surface); border:1.5px solid var(--border); color:var(--text);
+    font-family:inherit; transition:.15s;
+  }
+  .mode:hover:not(:disabled){border-color:var(--accent); transform:translateY(-1px)}
+  .mode:disabled{opacity:.5; cursor:not-allowed}
+  .mode.active{background:var(--accent); border-color:var(--accent); color:var(--bg)}
+  .mode svg{width:19px; height:19px; margin-bottom:3px}
+  .mode b{font-size:.88rem; font-weight:700}
+  .mode small{font-size:.68rem; color:var(--muted); line-height:1.3}
+  .mode.active small{color:color-mix(in oklab, var(--bg) 72%, transparent)}
+
+  .field{margin-bottom:13px}
+  .field label{display:block; font-size:.68rem; font-weight:600; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.08em; margin:0 2px 6px}
+  select{
+    width:100%; padding:10px 12px; border-radius:12px; font-family:inherit;
+    font-size:.84rem; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); cursor:pointer;
+  }
+
+  /* ---- banners ---- */
+  .banner{
+    display:flex; align-items:center; gap:9px; padding:11px 13px; margin-bottom:13px;
+    border-radius:12px; font-size:.79rem; font-weight:600; line-height:1.45;
+    background:var(--surface); border:1px solid var(--border); color:var(--text);
+  }
+  .banner.bad{background:color-mix(in oklab, var(--danger) 8%, var(--bg)); border-color:color-mix(in oklab, var(--danger) 28%, var(--bg)); color:var(--danger)}
+  .banner.warn{background:color-mix(in oklab, var(--amber) 9%, var(--bg)); border-color:color-mix(in oklab, var(--amber) 26%, var(--bg)); color:var(--amber); flex-wrap:wrap}
+  .banner.warn .btn{margin-top:2px}
+  .spin{width:13px; height:13px; flex:none; border-radius:999px;
+    border:2px solid color-mix(in oklab, var(--text) 20%, transparent);
+    border-top-color:var(--text); animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---- status rows ---- */
+  .status{display:flex; flex-direction:column; gap:9px; margin-bottom:14px}
   .row{
     display:flex; align-items:center; gap:11px; padding:11px 14px;
     background:var(--surface); border:1px solid var(--border); border-radius:13px;
@@ -48,17 +90,45 @@
   .row .name{font-weight:600; font-size:.88rem}
   .row .url{color:var(--muted); font-size:.72rem; margin-left:auto}
   .row .state{font-size:.72rem; font-weight:600; color:var(--muted); min-width:62px; text-align:right}
+
+  /* ---- share block ---- */
+  .share{
+    border:1px solid var(--border); border-radius:14px; padding:14px;
+    background:var(--surface); margin-bottom:14px;
+  }
+  .share h2{margin:0 0 3px; font-size:.79rem; font-weight:700}
+  .share p{margin:0 0 11px; font-size:.72rem; color:var(--muted); line-height:1.5}
+  .share .split{display:flex; gap:13px; align-items:center}
+  .share .urls{flex:1; min-width:0; display:flex; flex-direction:column; gap:8px}
+  .ubox{background:var(--bg); border:1px solid var(--border); border-radius:11px; padding:8px 10px}
+  .ubox .k{font-size:.62rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:700}
+  .ubox .v{display:flex; align-items:center; gap:6px; margin-top:2px}
+  .ubox code{
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace; font-size:.76rem;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;
+  }
+  .copy{
+    border:none; background:transparent; cursor:pointer; padding:2px; color:var(--muted);
+    border-radius:6px; flex:none; font:inherit; font-size:.64rem; font-weight:700;
+  }
+  .copy:hover{color:var(--text); background:var(--surface)}
+  #qr{width:104px; height:104px; flex:none; background:#fff; border-radius:11px;
+      border:1px solid var(--border); padding:5px}
+
+  /* ---- buttons ---- */
   .btn{
     display:flex; align-items:center; justify-content:center; gap:8px; width:100%;
     text-decoration:none; font-weight:600; font-size:.95rem; cursor:pointer;
     border-radius:13px; padding:14px; border:1px solid var(--accent);
-    background:var(--accent); color:var(--bg); transition:.15s;
+    background:var(--accent); color:var(--bg); transition:.15s; font-family:inherit;
   }
   .btn:hover{background:var(--accent-hover); border-color:var(--accent-hover); transform:translateY(-1px)}
   .btn.ghost{background:transparent; color:var(--text); border-color:var(--border)}
   .btn.ghost:hover{background:var(--surface)}
+  .btn[aria-disabled="true"], .btn:disabled{opacity:.45; pointer-events:none}
   .links{display:flex; gap:10px; margin-top:11px}
   .links .btn{padding:10px; font-size:.8rem}
+
   .hint{
     margin-top:18px; font-size:.74rem; color:var(--muted);
     background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:11px 13px;
@@ -66,12 +136,20 @@
   .hint b{color:var(--text)}
   details{margin-top:14px; font-size:.78rem; color:var(--muted)}
   details summary{cursor:pointer; font-weight:600; color:var(--text)}
+  .tabs{display:flex; gap:7px; margin:10px 0 0}
+  .tab{
+    font:inherit; font-size:.7rem; font-weight:600; padding:5px 11px; cursor:pointer;
+    border-radius:999px; border:1px solid var(--border); background:var(--surface); color:var(--muted);
+  }
+  .tab.on{background:var(--accent); border-color:var(--accent); color:var(--bg)}
   pre{
     background:var(--surface); border:1px solid var(--border); border-radius:11px;
-    padding:11px 13px; overflow:auto; font-size:.72rem; line-height:1.6;
-    font-family:ui-monospace,"Cascadia Code",Consolas,monospace; color:var(--text); margin:9px 0 0;
+    padding:11px 13px; overflow:auto; font-size:.68rem; line-height:1.6;
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace; color:var(--text);
+    margin:9px 0 0; max-height:230px; white-space:pre-wrap; word-break:break-word;
   }
   .foot{text-align:center; color:var(--muted); font-size:.66rem; margin-top:18px}
+  [hidden]{display:none !important}
 </style>
 </head>
 <body>
@@ -83,35 +161,92 @@
         <div class="tag">Fleet Console · v4.0</div>
       </div>
     </div>
-    <p class="sub">Open the console below. The launcher checks both servers live and lights up when they're ready.</p>
+    <p class="sub" id="sub">Choose how to run the app. The launcher starts both servers for you.</p>
+
+    <div class="modes" id="modes">
+      <button class="mode" data-mode="local" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <b>This PC only</b>
+        <small>Nobody else can reach it</small>
+      </button>
+      <button class="mode" data-mode="lan" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r=".8" fill="currentColor"/></svg>
+        <b>Local WiFi</b>
+        <small>Staff on the same wifi</small>
+      </button>
+    </div>
+
+    <div class="field" id="ipwrap" hidden>
+      <label for="ipsel">Which network address?</label>
+      <select id="ipsel"></select>
+    </div>
+
+    <div class="banner" id="phase" hidden></div>
 
     <div class="status">
       <div class="row">
         <span class="dot" id="dot-web"></span>
         <span class="name">Web app</span>
-        <span class="url">localhost:3000</span>
+        <span class="url" id="url-web">localhost:3000</span>
         <span class="state" id="state-web">checking…</span>
       </div>
       <div class="row">
         <span class="dot" id="dot-api"></span>
         <span class="name">API</span>
-        <span class="url">localhost:8001</span>
+        <span class="url" id="url-api">localhost:8001</span>
         <span class="state" id="state-api">checking…</span>
       </div>
     </div>
 
-    <a class="btn" href="http://localhost:3000" target="_blank" rel="noopener">
+    <div class="share" id="share" hidden>
+      <h2>Open on another device</h2>
+      <p>Staff just need a browser — nothing to install. Same wifi, same router.</p>
+      <div class="split">
+        <div class="urls">
+          <div class="ubox">
+            <div class="k">This PC</div>
+            <div class="v"><code id="u-local">—</code><button class="copy" data-copy="u-local" type="button">copy</button></div>
+          </div>
+          <div class="ubox">
+            <div class="k">Other devices</div>
+            <div class="v"><code id="u-lan">—</code><button class="copy" data-copy="u-lan" type="button">copy</button></div>
+          </div>
+        </div>
+        <img id="qr" alt="QR code for the app address" />
+      </div>
+    </div>
+
+    <div class="banner warn" id="fw" hidden>
+      <span>Windows Firewall is still blocking ports 3000 and 8001, so other devices can't connect yet.</span>
+      <button class="btn ghost" id="fwbtn" type="button">Allow through Windows Firewall</button>
+    </div>
+
+    <a class="btn" id="open" href="http://localhost:3000" target="_blank" rel="noopener">
       Open Fleet Console →
     </a>
     <div class="links">
-      <a class="btn ghost" href="http://localhost:8001/docs" target="_blank" rel="noopener">API Docs</a>
-      <a class="btn ghost" href="http://localhost:8001/api/health" target="_blank" rel="noopener">API Health</a>
+      <a class="btn ghost" id="docs" href="http://localhost:8001/docs" target="_blank" rel="noopener">API Docs</a>
+      <a class="btn ghost" id="health" href="http://localhost:8001/api/health" target="_blank" rel="noopener">API Health</a>
+    </div>
+    <div class="links" id="controls" hidden>
+      <button class="btn ghost" id="stop" type="button">Stop servers</button>
+      <button class="btn ghost" id="rebuild" type="button">Rebuild web app</button>
     </div>
 
     <div class="hint">Default login: <b>admin</b> / <b>admin</b> — change it in Settings → Profile.</div>
 
-    <details>
-      <summary>Servers not running? Start them</summary>
+    <details id="logwrap" hidden>
+      <summary>Server log</summary>
+      <div class="tabs">
+        <button class="tab on" data-svc="web" type="button">Web</button>
+        <button class="tab" data-svc="api" type="button">API</button>
+        <button class="tab" data-svc="build" type="button">Build</button>
+      </div>
+      <pre id="logbox">—</pre>
+    </details>
+
+    <details id="manual">
+      <summary>Start the servers by hand</summary>
       <p style="margin:9px 2px 0">Double-click <b>start.bat</b> in this folder, or run:</p>
       <pre>cd backend
 python -m uvicorn api.main:app --port 8001
@@ -124,43 +259,235 @@ npm run dev</pre>
   </main>
 
 <script>
-  function ping(url){
-    return new Promise(function(resolve){
-      var ctrl = new AbortController();
-      var to = setTimeout(function(){ ctrl.abort(); }, 2500);
-      // no-cors: we only care that *something* answered (opaque response = up).
-      fetch(url, { mode:"no-cors", signal: ctrl.signal, cache:"no-store" })
-        .then(function(){ clearTimeout(to); resolve(true); })
-        .catch(function(){ clearTimeout(to); resolve(false); });
+(function(){
+  var TOKEN = document.querySelector('meta[name="launcher-token"]').content;
+  // Served from disk rather than by launcher.py: the placeholder was never
+  // substituted, so there is nothing to control. Fall back to the old
+  // read-only ping view instead of showing dead buttons.
+  var LIVE = TOKEN.indexOf("__") !== 0 && location.protocol.indexOf("http") === 0;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var logSvc = "web", busy = false, lastPhase = "";
+
+  function call(path, opts){
+    opts = opts || {};
+    return fetch(path, {
+      method: opts.method || "GET",
+      cache: "no-store",
+      headers: { "X-Launcher-Token": TOKEN, "Content-Type": "application/json" },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(d){
+        if(!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+        return d;
+      });
     });
   }
-  function set(id, up){
-    var dot = document.getElementById("dot-"+id);
-    var st = document.getElementById("state-"+id);
+
+  function setDot(id, up, label){
+    var dot = $("dot-" + id), st = $("state-" + id);
     dot.className = "dot " + (up ? "up" : "down");
-    st.textContent = up ? "running" : "offline";
+    st.textContent = label || (up ? "running" : "offline");
     st.style.color = up ? "var(--ok)" : "var(--danger)";
   }
-  async function check(){
-    var web = await ping("http://localhost:3000");
-    var api = await ping("http://localhost:8001/api/health");
-    set("web", web); set("api", api);
-    document.getElementById("checked").textContent =
-      "last checked " + new Date().toLocaleTimeString();
+
+  /* ---------------- launcher-driven mode ---------------- */
+
+  function render(s){
+    var running = s.phase === "running";
+    var working = s.phase === "starting" || s.phase === "building";
+
+    // mode buttons
+    var btns = document.querySelectorAll(".mode");
+    for(var i=0;i<btns.length;i++){
+      var b = btns[i];
+      b.classList.toggle("active", running && s.mode === b.dataset.mode);
+      b.disabled = working;
+    }
+
+    // network address picker — only worth showing when there is a choice
+    var ips = s.candidate_ips || [];
+    $("ipwrap").hidden = ips.length < 2;
+    var sel = $("ipsel");
+    if(ips.length > 1 && sel.options.length !== ips.length){
+      sel.innerHTML = "";
+      ips.forEach(function(ip, idx){
+        var o = document.createElement("option");
+        o.value = ip;
+        o.textContent = ip + (idx === 0 ? "  (recommended)" : "");
+        sel.appendChild(o);
+      });
+    }
+
+    // phase banner
+    var ph = $("phase"), msg = "", cls = "banner";
+    if(s.phase === "building"){
+      msg = "Building the web app — the first run takes a couple of minutes.";
+      cls += "";
+    } else if(s.phase === "starting"){
+      msg = "Starting the servers…";
+    } else if(s.phase === "error"){
+      msg = s.message || "Something went wrong.";
+      cls += " bad";
+    } else if(running){
+      msg = s.mode === "lan"
+        ? "Running — shared on your local wifi."
+        : "Running — this PC only.";
+    }
+    ph.hidden = !msg;
+    ph.className = cls;
+    ph.innerHTML = "";
+    if(working){ var sp = document.createElement("span"); sp.className = "spin"; ph.appendChild(sp); }
+    ph.appendChild(document.createTextNode(msg));
+
+    // status rows
+    if(working && !s.api_up) setDot("api", false, "starting…"); else setDot("api", s.api_up);
+    if(working && !s.web_up) setDot("web", false, "starting…"); else setDot("web", s.web_up);
+    $("url-web").textContent = "localhost:3000";
+    $("url-api").textContent = "localhost:8001";
+
+    // share block
+    var lan = s.urls && s.urls.lan_web;
+    $("share").hidden = !(running && s.mode === "lan" && lan);
+    if(running && s.mode === "lan" && lan){
+      $("u-local").textContent = s.urls.local_web;
+      $("u-lan").textContent = lan;
+      var want = "/api/qr.svg?t=" + encodeURIComponent(TOKEN) + "&u=" + encodeURIComponent(lan);
+      if($("qr").getAttribute("src") !== want) $("qr").setAttribute("src", want);
+    }
+
+    // firewall nudge — only meaningful once LAN mode is actually up
+    $("fw").hidden = !(running && s.mode === "lan" && !s.firewall_ok);
+
+    // controls
+    $("controls").hidden = !(running || s.phase === "error");
+    $("stop").disabled = working;
+    $("rebuild").disabled = working;
+    $("open").setAttribute("aria-disabled", s.web_up ? "false" : "true");
+
+    // logs: open automatically while building or after a failure
+    $("logwrap").hidden = s.phase === "idle";
+    if(s.phase !== lastPhase){
+      if(s.phase === "building"){ logSvc = "build"; syncTabs(); $("logwrap").open = true; }
+      if(s.phase === "error"){ $("logwrap").open = true; }
+      lastPhase = s.phase;
+    }
+
+    $("manual").hidden = true;
+    $("checked").textContent = "last checked " + new Date().toLocaleTimeString();
   }
+
+  function syncTabs(){
+    var tabs = document.querySelectorAll(".tab");
+    for(var i=0;i<tabs.length;i++) tabs[i].classList.toggle("on", tabs[i].dataset.svc === logSvc);
+  }
+
+  function poll(){
+    call("/api/state").then(function(s){
+      render(s);
+      if(!$("logwrap").hidden && $("logwrap").open){
+        return call("/api/logs?svc=" + logSvc).then(function(d){
+          var box = $("logbox");
+          var stuck = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+          box.textContent = (d.lines && d.lines.length) ? d.lines.join("\n") : "—";
+          if(stuck) box.scrollTop = box.scrollHeight;
+        });
+      }
+    }).catch(function(){ /* launcher went away; next tick retries */ });
+  }
+
+  function start(mode){
+    if(busy) return;
+    busy = true;
+    var ip = $("ipwrap").hidden ? "" : $("ipsel").value;
+    call("/api/start", { method:"POST", body:{ mode: mode, ip: ip } })
+      .catch(function(e){ alert(e.message); })
+      .then(function(){ busy = false; poll(); });
+  }
+
+  function wire(){
+    var btns = document.querySelectorAll(".mode");
+    for(var i=0;i<btns.length;i++){
+      btns[i].addEventListener("click", function(){ start(this.dataset.mode); });
+    }
+    $("stop").addEventListener("click", function(){
+      call("/api/stop", { method:"POST" }).catch(function(){}).then(poll);
+    });
+    $("rebuild").addEventListener("click", function(){
+      call("/api/state").then(function(s){
+        if(!s.mode) return alert("Pick a mode first.");
+        return call("/api/start", { method:"POST",
+          body:{ mode: s.mode, ip: s.lan_ip, rebuild: true } });
+      }).catch(function(e){ alert(e.message); }).then(poll);
+    });
+    $("fwbtn").addEventListener("click", function(){
+      call("/api/firewall", { method:"POST" })
+        .then(function(){ this.textContent = "Accept the Windows prompt…"; }.bind(this))
+        .catch(function(e){ alert(e.message); });
+    });
+    var tabs = document.querySelectorAll(".tab");
+    for(var j=0;j<tabs.length;j++){
+      tabs[j].addEventListener("click", function(){ logSvc = this.dataset.svc; syncTabs(); poll(); });
+    }
+    var copies = document.querySelectorAll(".copy");
+    for(var k=0;k<copies.length;k++){
+      copies[k].addEventListener("click", function(){
+        var btn = this, text = $(btn.dataset.copy).textContent;
+        navigator.clipboard.writeText(text).then(function(){
+          btn.textContent = "copied";
+          setTimeout(function(){ btn.textContent = "copy"; }, 1400);
+        });
+      });
+    }
+  }
+
+  /* ---------------- file:// fallback (no launcher) ---------------- */
+
+  function pingOnly(){
+    function ping(url){
+      return new Promise(function(resolve){
+        var ctrl = new AbortController();
+        var to = setTimeout(function(){ ctrl.abort(); }, 2500);
+        // no-cors: we only care that *something* answered (opaque = up).
+        fetch(url, { mode:"no-cors", signal: ctrl.signal, cache:"no-store" })
+          .then(function(){ clearTimeout(to); resolve(true); })
+          .catch(function(){ clearTimeout(to); resolve(false); });
+      });
+    }
+    Promise.all([ping("http://localhost:3000"), ping("http://localhost:8001/api/health")])
+      .then(function(r){
+        setDot("web", r[0]); setDot("api", r[1]);
+        $("checked").textContent = "last checked " + new Date().toLocaleTimeString();
+      });
+  }
+
   // Pull the real business name from the API once it's up (nice touch).
   function loadBrand(){
     fetch("http://localhost:8001/api/business/name", { cache:"no-store" })
       .then(function(r){ return r.json(); })
       .then(function(d){
-        if(d && d.business_name){ document.getElementById("bizname").textContent = d.business_name; }
-        if(d && d.initial){ document.getElementById("mark").textContent = d.initial; }
+        if(d && d.business_name) $("bizname").textContent = d.business_name;
+        if(d && d.initial) $("mark").textContent = d.initial;
       })
       .catch(function(){});
   }
-  check(); loadBrand();
-  setInterval(check, 4000);
+
+  if(LIVE){
+    $("modes").hidden = false;
+    wire();
+    poll();
+    setInterval(poll, 2000);
+  } else {
+    $("modes").hidden = true;
+    $("sub").textContent =
+      "This page is open from disk, so it can only watch. Run start.bat to get the buttons.";
+    $("manual").open = true;
+    pingOnly();
+    setInterval(pingOnly, 4000);
+  }
+  loadBrand();
   setInterval(loadBrand, 12000);
+})();
 </script>
 </body>
 </html>

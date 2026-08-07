@@ -10,22 +10,28 @@ vehicle — all in INTEGER cents.
 from sqlalchemy import text
 from core.db import get_engine
 from data.repositories import vehicle_costs as costs_repo
+from data.repositories import compensations as comp_repo
 
 # Charge types that count as revenue (deposits/refunds are NOT income).
-_REVENUE_TYPES = "('rental','overdue_penalty','damage')"
+# 'damage' plus the other compensation types (mechanic_fee, traffic_fine, …)
+# are money billed back to a client — see data/repositories/compensations.py.
+_REVENUE_TYPES = "('rental','overdue_penalty'," + ",".join(f"'{t}'" for t in comp_repo.COMPENSATION_TYPES) + ")"
+
+
+_COMPENSATION_TYPES_SQL = "(" + ",".join(f"'{t}'" for t in comp_repo.COMPENSATION_TYPES) + ")"
 
 
 # ── Income ───────────────────────────────────────────────────────────────────
 def revenue_summary() -> dict:
-    sql = """SELECT
+    sql = f"""SELECT
         COALESCE(SUM(CASE WHEN type='rental'          THEN amount END),0) AS rental,
         COALESCE(SUM(CASE WHEN type='overdue_penalty' THEN amount END),0) AS penalty,
-        COALESCE(SUM(CASE WHEN type='damage'          THEN amount END),0) AS damage
+        COALESCE(SUM(CASE WHEN type IN {_COMPENSATION_TYPES_SQL} THEN amount END),0) AS compensation
     FROM charges"""
     with get_engine().connect() as conn:
         row = conn.execute(text(sql)).mappings().first()
-    r, p, d = row["rental"], row["penalty"], row["damage"]
-    return {"rental": r, "penalty": p, "damage": d, "total": r + p + d}
+    r, p, c = row["rental"], row["penalty"], row["compensation"]
+    return {"rental": r, "penalty": p, "damage": c, "total": r + p + c}
 
 
 def revenue_by_vehicle() -> list[dict]:
@@ -44,13 +50,13 @@ def revenue_by_vehicle() -> list[dict]:
 def revenue_by_customer() -> list[dict]:
     """Revenue collected per customer (name + phone), joining the charges ledger
     through rentals to customers. Only revenue charge types count; deposits and
-    refunds are excluded. `damage` and `penalty` break out the damage and
-    overdue (due-date) charges so they can be shown in their own columns.
-    Sorted by revenue descending."""
+    refunds are excluded. `damage` (all compensation types) and `penalty` break
+    out the compensation and overdue (due-date) charges so they can be shown in
+    their own columns. Sorted by revenue descending."""
     sql = f"""SELECT cu.customer_id, cu.full_name, cu.phone,
                      COALESCE(SUM(CASE WHEN c.type IN {_REVENUE_TYPES}
                                        THEN c.amount END),0) AS revenue,
-                     COALESCE(SUM(CASE WHEN c.type='damage'
+                     COALESCE(SUM(CASE WHEN c.type IN {_COMPENSATION_TYPES_SQL}
                                        THEN c.amount END),0) AS damage,
                      COALESCE(SUM(CASE WHEN c.type='overdue_penalty'
                                        THEN c.amount END),0) AS penalty,

@@ -11,7 +11,7 @@
 - **Money:** INTEGER **cents** end-to-end. Format only at the display edge.
 - **Dates:** ISO-8601 text (`YYYY-MM-DDTHH:MM:SS`); cost/license periods `YYYY-MM-DD`.
 - **Roles/levels:** `visitor 0 < employer 1 < admin 2 < super_admin 3`. `employer` id is labelled **Agent/Acente**.
-- **i18n:** 453 keys × 6 langs (tr/en/de/it/es/sq). `sq` is staff-only (`STAFF_ONLY_LANGS`).
+- **i18n:** 453 keys × 3 langs (tr/en/sq). `sq` is staff-only (`STAFF_ONLY_LANGS`).
 - **User object everywhere:** `{username, full_name, role}` (+ `email`, `lang` on the JWT/session).
 
 ---
@@ -454,7 +454,7 @@ Two `st.columns`-equivalent layout (not single vertical flow):
 
 ### 4.2 i18n export
 
-- **Frontend strings:** `config/i18n.TRANSLATIONS` (453 keys × 6 langs; TR/EN inline, DE/IT/ES/SQ from `config/lang_<code>.py` `UI` dicts) → serialized by `GET /api/i18n/{lang}.json`. Client `t(key)` looks up the loaded map for the user's `lang` (from JWT). `sq` filtered for visitors at the **selector** level, but the bundle itself can be served.
+- **Frontend strings:** `config/i18n.TRANSLATIONS` (453 keys × 3 langs; TR/EN inline, SQ from `config/lang_sq.py` `UI` dict) → serialized by `GET /api/i18n/{lang}.json`. Client `t(key)` looks up the loaded map for the user's `lang` (from JWT). `sq` filtered for visitors at the **selector** level, but the bundle itself can be served.
 - **Documents (server-side):** invoices always render in their explicit document lang via the **session-free** `t_lang(key, lang)`. **License invoice uses UI `t()`** (not per-document lang) — keep this distinction.
 - **RENTAL_TERMS:** `config/terms.rental_terms(lang)` → `{title, rules:[...13]}` served at `GET /api/i18n/terms/{lang}` and embedded server-side in invoice HTML/PDF. Terms language follows invoice lang, not UI lang.
 - **Adding a language** remains: extend `LANGUAGES` + add `config/lang_<code>.py` (UI+TERMS). Keep key-set parity (453 × 6).

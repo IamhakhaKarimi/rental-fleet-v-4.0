@@ -1,15 +1,19 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, apiDel, apiGet, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
+import { usePolling } from "@/lib/usePolling";
+import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
-import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
+import { RefreshIcon } from "@/components/RefreshIcon";
+import { ViewToggle } from "@/components/ViewToggle";
 import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
+import { CustomerReportModal, useMonthLabel } from "@/components/CustomerReportModal";
 import type { LanguagesInfo } from "@/lib/types";
 
 // English fallback when a key isn't in the dictionary.
@@ -41,6 +45,7 @@ interface CustomerRental {
   daily_rate: number;
   total_amount: number;
   status: string;
+  created_by: string;
   created_by_name: string;
 }
 
@@ -67,6 +72,59 @@ function fmtDate(s: string | null | undefined, lang: string): string {
   }).format(d);
 }
 
+// ── Small presentational primitives for the customer dialog ────────────────
+// Shared so every block in the modal gets the same header rhythm, the same
+// label casing and the same nesting contrast (bg-bg panels on the modal's
+// bg-surface shell, one step lighter, so cards actually read as cards).
+
+function SectionHead({
+  icon,
+  title,
+  count,
+  action,
+}: {
+  icon: string;
+  title: string;
+  count?: number;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 mb-2.5">
+      <h3 className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.09em] text-muted">
+        <span className="msr text-[15px]">{icon}</span>
+        {title}
+        {count !== undefined && <span className="text-ink">({count})</span>}
+      </h3>
+      <div className="h-px flex-1 bg-line" />
+      {action}
+    </div>
+  );
+}
+
+function StatTile({ label, value, icon }: { label: string; value: string; icon: string }) {
+  return (
+    <div className="rounded-xl border border-line bg-bg px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[0.63rem] font-semibold uppercase tracking-[0.07em] text-muted">
+        <span className="msr text-[14px]">{icon}</span>
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="font-display font-bold text-ink text-[1.05rem] tabular-nums mt-1 truncate">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// One labelled fact inside a rental card's data grid.
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[0.62rem] font-semibold uppercase tracking-[0.07em] text-muted truncate">{label}</div>
+      <div className="text-xs text-ink mt-0.5 truncate">{children}</div>
+    </div>
+  );
+}
+
 function CustomerDialog({
   customer,
   onClose,
@@ -85,6 +143,9 @@ function CustomerDialog({
   const canEdit = can(user, "service_vehicle");
   const canReassign = can(user, "edit_business_settings") || can(user, "manage_users");
   const canDelete = can(user, "edit_business_settings");
+  // Admin + super-admin may retune a booked deal (rate / registered-by) or drop
+  // a duplicate row from the history — both move money in the Finance ledger.
+  const canEditRental = roleLevel(user) >= 2;
   const canAlbanian = can(user, "create_reservation");
 
   const [rentals, setRentals] = useState<CustomerRental[]>([]);
@@ -99,17 +160,17 @@ function CustomerDialog({
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
 
-  // Reassign
-  const [dealId, setDealId] = useState("");
-  const [username, setUsername] = useState("");
-  const [reassignBusy, setReassignBusy] = useState(false);
+  // Per-rental inline editor: which deal is open, and its draft values. Replaces
+  // the old page-level "Reassign Registered By" block — the rental being edited
+  // is now the card you clicked, so there's no second dropdown to keep in sync.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editRate, setEditRate] = useState(0);
+  const [editUser, setEditUser] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   const loadRentals = useCallback(() => {
     apiGet<CustomerRental[]>(`/api/customers/${customer.customer_id}/rentals`)
-      .then((rows) => {
-        setRentals(rows);
-        if (rows.length) setDealId((cur) => (rows.some((r) => r.deal_id === cur) ? cur : rows[0].deal_id));
-      })
+      .then(setRentals)
       .catch(() => {});
   }, [customer.customer_id]);
 
@@ -127,10 +188,7 @@ function CustomerDialog({
   useEffect(() => {
     if (!canReassign) return;
     apiGet<StaffUser[]>("/api/users")
-      .then((rows) => {
-        setStaff(rows);
-        if (rows.length) setUsername((cur) => (rows.some((u) => u.username === cur) ? cur : rows[0].username));
-      })
+      .then(setStaff)
       .catch(() => {});
   }, [canReassign]);
 
@@ -139,6 +197,30 @@ function CustomerDialog({
     () => Object.entries(langs).filter(([code]) => code !== "sq" || canAlbanian),
     [langs, canAlbanian]
   );
+
+  // Header summary — derived from the history so it always matches the rows below.
+  const stats = useMemo(() => {
+    const billed = rentals.reduce((s, r) => s + (r.total_amount || 0), 0);
+    return {
+      count: rentals.length,
+      active: rentals.filter((r) => r.status === "Active").length,
+      billed,
+      last: rentals.length ? rentals[0].start_dt : null, // API sorts start_dt DESC
+    };
+  }, [rentals]);
+
+  // Only enable Save once something actually changed.
+  const dirty =
+    name !== (customer.full_name || "") ||
+    phone !== (customer.phone || "") ||
+    idp !== (customer.id_passport || "");
+
+  // Typing invalidates the last save/error banner.
+  const onField = (set: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value);
+    setOk("");
+    setErr("");
+  };
 
   async function saveEdit() {
     if (!name.trim()) {
@@ -164,19 +246,48 @@ function CustomerDialog({
     }
   }
 
-  async function reassign() {
-    if (!dealId || !username) return;
-    setReassignBusy(true);
+  // Open the inline editor on one rental, seeded with its current values.
+  // Rates are stored in cents but negotiated in whole euros, matching the
+  // booking dialog's stepper.
+  function openEditor(r: CustomerRental) {
+    setEditing(r.deal_id);
+    setEditRate(Math.max(0, Math.round((r.daily_rate || 0) / 100)));
+    setEditUser(r.created_by || "");
+  }
+
+  // Persist the drafted rate / registered-by. Each field is only PUT when it
+  // actually changed, so an untouched field never writes an audit entry.
+  async function saveRental(r: CustomerRental) {
+    setEditBusy(true);
     try {
-      await apiPut(`/api/rentals/${dealId}/reassign`, { username });
+      const rate = Math.max(0, Math.round(editRate));
+      if (rate !== Math.round((r.daily_rate || 0) / 100)) {
+        await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
+      }
+      if (canReassign && editUser && editUser !== (r.created_by || "")) {
+        await apiPut(`/api/rentals/${r.deal_id}/reassign`, { username: editUser });
+      }
+      toast.success(f(t, "rental_updated", "Rental updated."));
+      setEditing(null);
       loadRentals();
       onChange();
-      setOk(f(t, "saved", "Saved"));
-      toast.success(f(t, "reassigned_ok", "Rental reassigned."));
     } catch (e: any) {
       toast.error(t(e?.key || "error"));
     } finally {
-      setReassignBusy(false);
+      setEditBusy(false);
+    }
+  }
+
+  async function removeRentalFromHistory(dealId: string) {
+    if (!confirm(f(t, "remove_from_history_confirm", "Remove this rental from history? This cannot be undone and will affect finance totals.")))
+      return;
+    try {
+      await apiDel(`/api/rentals/${dealId}`, { confirm: true });
+      toast.success(f(t, "rental_removed", "Rental removed from history."));
+      loadRentals();
+      onChange();
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
     }
   }
 
@@ -195,125 +306,248 @@ function CustomerDialog({
   const lbl = "text-xs text-muted";
 
   return (
-    <div className="space-y-5">
-      {/* Edit form (employer+) */}
+    <div className="space-y-6">
+      {/* ── At-a-glance summary ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <StatTile icon="receipt_long" label={f(t, "rentals", "Rentals")} value={String(stats.count)} />
+        <StatTile icon="vpn_key" label={f(t, "active", "Active")} value={String(stats.active)} />
+        <StatTile icon="payments" label={f(t, "total_billed", "Total billed")} value={formatEur(stats.billed)} />
+        <StatTile icon="event" label={f(t, "last_rental", "Last Rental")} value={fmtDate(stats.last, lang)} />
+      </div>
+
+      {/* ── Contact details (employer+) ─────────────────────────────────── */}
       {canEdit && (
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold">{f(t, "edit_customer", "Edit Customer")}</h3>
-          <label className={lbl}>
-            {t("client_name")}
-            <input className="uppercase-input" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
+        <section>
+          <SectionHead icon="badge" title={f(t, "edit_customer", "Customer Details")} />
+          <div className="rounded-xl border border-line bg-bg p-4 space-y-3">
             <label className={lbl}>
-              {t("client_phone")}
-              <input className="uppercase-input" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              {t("client_name")}
+              <input className="uppercase-input" value={name} onChange={onField(setName)} />
             </label>
-            <label className={lbl}>
-              {t("client_id")}
-              <input className="uppercase-input" value={idp} onChange={(e) => setIdp(e.target.value)} />
-            </label>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <label className={lbl}>
+                {t("client_phone")}
+                <input className="uppercase-input" value={phone} onChange={onField(setPhone)} />
+              </label>
+              <label className={lbl}>
+                {t("client_id")}
+                <input className="uppercase-input" value={idp} onChange={onField(setIdp)} />
+              </label>
+            </div>
+            {err && (
+              <div className="text-xs text-danger flex items-center gap-1.5">
+                <span className="msr text-[15px]">error</span>
+                {err}
+              </div>
+            )}
+            <div className="flex items-center gap-3 pt-0.5">
+              <button
+                className="btn btn-primary !py-1.5 text-xs"
+                onClick={saveEdit}
+                disabled={busy || !dirty}
+              >
+                <span className="msr text-[16px]">check</span>
+                {busy ? "…" : f(t, "update_btn", "Save changes")}
+              </button>
+              {ok && (
+                <span className="text-xs text-ok flex items-center gap-1">
+                  <span className="msr text-[15px]">check_circle</span>
+                  {ok}
+                </span>
+              )}
+            </div>
           </div>
-          {err && <div className="text-sm text-danger">{err}</div>}
-          {ok && <div className="text-sm text-ok">{ok}</div>}
-          <button className="btn btn-primary" onClick={saveEdit} disabled={busy}>
-            <span className="msr text-[16px]">check</span>
-            {busy ? "…" : f(t, "update_btn", "Save")}
-          </button>
         </section>
       )}
 
-      {/* Rental history */}
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">
-          {f(t, "rental_history", "Rental History")} ({rentals.length})
-        </h3>
-        <div className="space-y-2">
-          {rentals.map((r) => (
-            <div key={r.deal_id} className="card p-3 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-medium text-ink truncate">
-                    {r.make_model} · {r.license_plate || "—"}
+      {/* ── Rental history ──────────────────────────────────────────────── */}
+      <section>
+        <SectionHead icon="history" title={f(t, "rental_history", "Rental History")} count={rentals.length} />
+        <div className="space-y-2.5">
+          {rentals.map((r) => {
+            const open = editing === r.deal_id;
+            return (
+              <div key={r.deal_id} className="rounded-xl border border-line bg-bg overflow-hidden">
+                {/* Identity + billed total */}
+                <div className="flex items-start justify-between gap-3 px-3.5 pt-3">
+                  <div className="min-w-0">
+                    <div className="font-medium text-ink truncate leading-tight">{r.make_model}</div>
+                    <div className="text-[0.72rem] text-muted mt-0.5 truncate">
+                      {r.license_plate || "—"} · {r.deal_id}
+                    </div>
                   </div>
-                  <div className="text-xs text-muted">
-                    {fmtDate(r.start_dt, lang)} → {fmtDate(r.end_dt, lang)} · {r.rental_days} {t("days")}
+                  <div className="text-right shrink-0">
+                    <div className="font-display font-bold text-accent text-lg tabular-nums leading-none">
+                      {formatEur(r.total_amount)}
+                    </div>
+                    <div className="mt-1.5">
+                      <StatusBadge status={r.status} />
+                    </div>
                   </div>
-                  {r.created_by_name && (
-                    <div className="text-xs text-muted flex items-center gap-1 mt-0.5">
-                      <span className="msr text-[13px]">person</span>
-                      {r.created_by_name}
+                </div>
+
+                {/* Deal facts */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-2 px-3.5 py-3">
+                  <Fact label={t("start_date")}>{fmtDate(r.start_dt, lang)}</Fact>
+                  <Fact label={t("return_date")}>{fmtDate(r.end_dt, lang)}</Fact>
+                  <Fact label={t("days")}>{r.rental_days}</Fact>
+                  <Fact label={f(t, "rate", "Rate")}>
+                    {formatEur(r.daily_rate)}
+                    <span className="text-muted">/{f(t, "day", "day")}</span>
+                  </Fact>
+                </div>
+
+                {r.created_by_name && (
+                  <div className="flex items-center gap-1.5 px-3.5 pb-3 text-[0.72rem] text-muted truncate">
+                    <span className="msr text-[14px]">person</span>
+                    {f(t, "registered_by", "Registered By")}:
+                    <span className="text-ink">{r.created_by_name}</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex items-center gap-1.5 flex-wrap px-3.5 py-2.5 border-t border-line">
+                  <span className="text-[0.7rem] text-muted flex items-center gap-1">
+                    <span className="msr text-[15px]">receipt_long</span>
+                    {f(t, "print_invoice", "Invoice")}
+                  </span>
+                  {invoiceLangs.map(([code, label]) => (
+                    <button
+                      key={code}
+                      className="btn !py-1 !px-2 text-xs"
+                      title={label}
+                      onClick={() => onInvoice({ deal_id: r.deal_id, lang: code })}
+                    >
+                      {label.split(" ")[0] || code.toUpperCase()}
+                    </button>
+                  ))}
+                  {canEditRental && (
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <button
+                        className={`btn !py-1 !px-2 text-xs ${open ? "btn-primary" : ""}`}
+                        title={f(t, "edit_rental_hint", "Edit negotiated rate / registered by")}
+                        onClick={() => (open ? setEditing(null) : openEditor(r))}
+                      >
+                        <span className="msr text-[16px]">tune</span>
+                        {f(t, "edit", "Edit")}
+                      </button>
+                      <button
+                        className="btn btn-danger !py-1 !px-2 text-xs"
+                        title={f(t, "remove_from_history", "Remove from history")}
+                        onClick={() => removeRentalFromHistory(r.deal_id)}
+                      >
+                        <span className="msr text-[16px]">delete</span>
+                        {f(t, "remove_from_history", "Remove from history")}
+                      </button>
                     </div>
                   )}
                 </div>
-                <div className="text-right shrink-0 space-y-1">
-                  <div className="font-display font-bold text-accent">{formatEur(r.total_amount)}</div>
-                  <StatusBadge status={r.status} />
-                </div>
+
+                {/* Inline editor (admin+) — negotiated rate + registered by */}
+                {open && (
+                  <div className="px-3.5 py-3.5 border-t border-line bg-surface space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className={lbl}>
+                        {t("negotiated_rate")} (€)
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="btn !p-2"
+                            title="−5"
+                            aria-label={f(t, "decrease", "Decrease")}
+                            onClick={() => setEditRate((v) => Math.max(0, v - 5))}
+                          >
+                            <span className="msr text-[16px]">remove</span>
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            value={editRate}
+                            className="flex-1 text-center"
+                            onChange={(e) => setEditRate(Math.max(0, +e.target.value))}
+                          />
+                          <button
+                            type="button"
+                            className="btn !p-2"
+                            title="+5"
+                            aria-label={f(t, "increase", "Increase")}
+                            onClick={() => setEditRate((v) => v + 5)}
+                          >
+                            <span className="msr text-[16px]">add</span>
+                          </button>
+                        </div>
+                      </div>
+                      {canReassign && staff.length > 0 && (
+                        <label className={lbl}>
+                          {f(t, "registered_by", "Registered By")}
+                          <select value={editUser} onChange={(e) => setEditUser(e.target.value)}>
+                            {staff.map((u) => (
+                              <option key={u.username} value={u.username}>
+                                {u.full_name || u.username} ({u.username})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </div>
+
+                    {/* Live recomputed total — mirrors the booking dialog */}
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg px-3 py-2">
+                      <span className="text-xs text-muted">
+                        {f(t, "new_total", "New total")} · €{editRate} × {r.rental_days}
+                      </span>
+                      <span className="font-display font-bold text-accent tabular-nums">
+                        {formatEur(editRate * r.rental_days * 100)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="btn btn-primary !py-1.5 text-xs"
+                        onClick={() => saveRental(r)}
+                        disabled={editBusy}
+                      >
+                        <span className="msr text-[16px]">check</span>
+                        {editBusy ? "…" : f(t, "update_btn", "Save changes")}
+                      </button>
+                      <button
+                        className="btn !py-1.5 text-xs"
+                        onClick={() => setEditing(null)}
+                        disabled={editBusy}
+                      >
+                        {f(t, "cancel", "Cancel")}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              {/* Per-language invoice flag buttons → open invoice in a Modal */}
-              <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-line">
-                <span className="text-xs text-muted mr-1 flex items-center gap-1">
-                  <span className="msr text-[15px]">receipt_long</span>
-                  {f(t, "print_invoice", "Invoice")}:
-                </span>
-                {invoiceLangs.map(([code, label]) => (
-                  <button
-                    key={code}
-                    className="btn !py-1 !px-2 text-xs"
-                    title={label}
-                    onClick={() => onInvoice({ deal_id: r.deal_id, lang: code })}
-                  >
-                    {label.split(" ")[0] || code.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {rentals.length === 0 && (
-            <div className="text-sm text-muted">{f(t, "no_rentals", "No rentals yet.")}</div>
+            <div className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
+              {f(t, "no_rentals", "No rentals yet.")}
+            </div>
           )}
         </div>
       </section>
 
-      {/* Reassign registered-by (admin+) */}
-      {canReassign && rentals.length > 0 && staff.length > 0 && (
-        <section className="space-y-3 border-t border-line pt-4">
-          <h3 className="text-sm font-semibold">{f(t, "reassign_registered_by", "Reassign Registered By")}</h3>
-          <label className={lbl}>
-            {f(t, "rental", "Rental")}
-            <select value={dealId} onChange={(e) => setDealId(e.target.value)}>
-              {rentals.map((r) => (
-                <option key={r.deal_id} value={r.deal_id}>
-                  {r.make_model} · {fmtDate(r.start_dt, lang)} ({r.created_by_name || "—"})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={lbl}>
-            {f(t, "registered_by", "Registered By")}
-            <select value={username} onChange={(e) => setUsername(e.target.value)}>
-              {staff.map((u) => (
-                <option key={u.username} value={u.username}>
-                  {u.full_name || u.username} ({u.username})
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="btn btn-primary" onClick={reassign} disabled={reassignBusy}>
-            <span className="msr text-[16px]">swap_horiz</span>
-            {reassignBusy ? "…" : f(t, "apply", "Apply")}
-          </button>
-        </section>
-      )}
-
-      {/* Delete (super-admin) */}
+      {/* ── Danger zone (super-admin) ───────────────────────────────────── */}
       {canDelete && (
-        <section className="border-t border-line pt-4">
-          <button className="btn btn-danger" onClick={removeCustomer}>
-            <span className="msr text-[16px]">delete</span>
-            {f(t, "delete_customer", "Delete Customer")}
-          </button>
+        <section>
+          <SectionHead icon="warning" title={f(t, "danger_zone", "Danger Zone")} />
+          <div className="rounded-xl border border-line bg-bg p-4 flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-xs text-muted max-w-sm">
+              {f(
+                t,
+                "delete_customer_hint",
+                "Permanently deletes this customer together with every rental and charge listed above."
+              )}
+            </p>
+            <button className="btn btn-danger !py-1.5 text-xs shrink-0" onClick={removeCustomer}>
+              <span className="msr text-[16px]">delete_forever</span>
+              {f(t, "delete_customer", "Delete Customer")}
+            </button>
+          </div>
         </section>
       )}
     </div>
@@ -406,11 +640,15 @@ function InvoiceViewer({ req }: { req: InvoiceRequest }) {
               {f(t, "loading", "Loading…")}
             </div>
           )}
+          {/* A hard 760px is taller than a phone viewport, so the preview took
+              over the screen with no way to see the controls around it. Below
+              `lg` it becomes a scrollable 60dvh window onto the same document;
+              desktop keeps the full 760px. */}
           <iframe
             srcDoc={html}
             title="invoice"
-            className="w-full rounded-md bg-white"
-            style={{ height: 760, border: 0 }}
+            className="w-full rounded-md bg-white h-[60dvh] lg:h-[760px]"
+            style={{ border: 0 }}
           />
         </div>
       )}
@@ -437,6 +675,7 @@ function InvoicePrintModal({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [printing, setPrinting] = useState(false);
+  const monthLabel = useMonthLabel(lang, t);
 
   useEffect(() => {
     apiGet<ActiveRentalLite[]>("/api/rentals/active")
@@ -470,14 +709,6 @@ function InvoicePrintModal({ onClose }: { onClose: () => void }) {
   const allOn = rentals.length > 0 && selected.size === rentals.length;
   const toggleAll = () =>
     setSelected(allOn ? new Set() : new Set(rentals.map((r) => r.deal_id)));
-
-  const monthLabel = (ym: string) => {
-    if (ym === "—") return f(t, "no_date", "No date");
-    const [y, mo] = ym.split("-").map(Number);
-    return new Intl.DateTimeFormat(lang || "en", { month: "long", year: "numeric" }).format(
-      new Date(y, mo - 1, 1)
-    );
-  };
 
   async function print() {
     const ids = Array.from(selected);
@@ -577,18 +808,9 @@ export default function CustomersPage() {
   const [open, setOpen] = useState<CustomerRow | null>(null);
   const [invoice, setInvoice] = useState<InvoiceRequest | null>(null);
   const [invoicePrint, setInvoicePrint] = useState(false);
-  const [reportBusy, setReportBusy] = useState(false);
-  const [view, setView] = useState<ViewMode>("cards");
-
-  // Remember the chosen view across visits.
-  useEffect(() => {
-    const v = localStorage.getItem("customers_view");
-    if (v === "cards" || v === "table") setView(v);
-  }, []);
-  const changeView = (v: ViewMode) => {
-    setView(v);
-    localStorage.setItem("customers_view", v);
-  };
+  const [csvReport, setCsvReport] = useState(false);
+  const [pdfReport, setPdfReport] = useState(false);
+  const [view, changeView] = useResponsiveView("customers_view");
 
   // Quick-find dropdown (independent search box + selected customer id).
   const [pick, setPick] = useState("");
@@ -597,13 +819,26 @@ export default function CustomersPage() {
   const canDeleteCustomer = roleLevel(user) >= 2; // admin + super-admin
 
   // Single source of truth — one fetch, reused by grid + dropdown + inactive list.
-  const load = useCallback(() => {
-    apiGet<CustomerRow[]>(`/api/customers?q=${encodeURIComponent(q)}`)
+  const load = useCallback(async () => {
+    await apiGet<CustomerRow[]>(`/api/customers?q=${encodeURIComponent(q)}`)
       .then(setRows)
       .catch(() => {});
   }, [q]);
+
+  const { isLoading, refetch } = usePolling(load, { interval: 15000 });
+
+  // Re-query as the search box is typed, debounced so a keystroke doesn't hit the
+  // API. The first run is skipped — usePolling already did the initial fetch.
+  const firstSearch = useRef(true);
   useEffect(() => {
-    load();
+    if (firstSearch.current) {
+      firstSearch.current = false;
+      return;
+    }
+    const id = setTimeout(() => {
+      load();
+    }, 300);
+    return () => clearTimeout(id);
   }, [load]);
 
   // When a flag button asks for an invoice, close the customer modal first so
@@ -646,26 +881,6 @@ export default function CustomersPage() {
     }
   }
 
-  async function downloadReport(url: string, name: string) {
-    setReportBusy(true);
-    try {
-      const res = (await api(url, { raw: true })) as Response;
-      if (!res.ok) throw { key: "error" };
-      const blob = await res.blob();
-      const objUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objUrl;
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(objUrl);
-      toast.success(f(t, "report_downloaded", "Report downloaded."));
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    } finally {
-      setReportBusy(false);
-    }
-  }
-
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -673,7 +888,10 @@ export default function CustomersPage() {
           <span className="msr text-[22px]">group</span>
           <h1 className="text-xl font-bold">{t("nav_customers")}</h1>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Four report/print actions. On a phone they become a full-width 2-up
+            grid instead of wrapping into four ragged rows of pill buttons. */}
+        <div className="flex items-center gap-2 flex-wrap max-sm:grid max-sm:grid-cols-2 max-sm:w-full">
+          <RefreshIcon onClick={refetch} isLoading={isLoading} />
           <ViewToggle
             value={view}
             onChange={changeView}
@@ -682,22 +900,15 @@ export default function CustomersPage() {
           />
           <button
             className="btn !py-1.5 text-xs"
-            onClick={() =>
-              downloadReport(
-                `/api/reports/customers-timeline.pdf?lang=${encodeURIComponent(lang || "tr")}`,
-                "customers-timeline.pdf"
-              )
-            }
-            disabled={reportBusy}
-            title={f(t, "report_pdf_hint", "Customer rental timeline (PDF)")}
+            onClick={() => setPdfReport(true)}
+            title={f(t, "report_pdf_hint", "Paginated client list (PDF)")}
           >
             <span className="msr text-[16px]">picture_as_pdf</span>
             {f(t, "report_pdf", "Report (PDF)")}
           </button>
           <button
             className="btn !py-1.5 text-xs"
-            onClick={() => downloadReport("/api/reports/customers.csv", "customers-report.csv")}
-            disabled={reportBusy}
+            onClick={() => setCsvReport(true)}
             title={f(t, "report_csv_hint", "Customers + car metadata (CSV)")}
           >
             <span className="msr text-[16px]">table_view</span>
@@ -714,28 +925,22 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      <input
-        placeholder={t("search")}
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        className="max-w-sm"
-      />
-      <p className="text-xs text-muted">
-        {rows.length} {f(t, "customers_count", "customers")}
-      </p>
-
       {/* Quick-find: [search input] [customer dropdown] [Edit button] */}
       <div className="flex items-end gap-2 flex-wrap">
-        <label className="text-xs text-muted">
+        <label className="text-xs text-muted max-sm:w-full">
           {f(t, "quick_find", "Quick Find")}
           <input
             placeholder={t("search")}
             value={pick}
             onChange={(e) => setPick(e.target.value)}
-            className="max-w-[12rem]"
+            className="w-full lg:max-w-[12rem]"
           />
         </label>
-        <select value={pickId} onChange={(e) => setPickId(e.target.value)} className="max-w-xs">
+        <select
+          value={pickId}
+          onChange={(e) => setPickId(e.target.value)}
+          className="w-full lg:max-w-xs"
+        >
           {pickOptions.length === 0 && <option value="">—</option>}
           {pickOptions.map((c) => (
             <option key={c.customer_id} value={c.customer_id}>
@@ -748,6 +953,16 @@ export default function CustomersPage() {
           {f(t, "edit", "Edit")}
         </button>
       </div>
+
+      <input
+        placeholder={t("search")}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        className="max-w-sm"
+      />
+      <p className="text-xs text-muted">
+        {rows.length} {f(t, "customers_count", "customers")}
+      </p>
 
       {view === "cards" ? (
         <SwipeDeck
@@ -931,6 +1146,10 @@ export default function CustomersPage() {
       )}
 
       {invoicePrint && <InvoicePrintModal onClose={() => setInvoicePrint(false)} />}
+
+      {pdfReport && <CustomerReportModal mode="pdf" onClose={() => setPdfReport(false)} />}
+
+      {csvReport && <CustomerReportModal mode="csv" onClose={() => setCsvReport(false)} />}
     </div>
   );
 }

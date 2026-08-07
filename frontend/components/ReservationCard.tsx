@@ -7,6 +7,10 @@ import { formatEur } from "@/lib/money";
 import { Modal } from "./Modal";
 import { StatusBadge } from "./StatusBadge";
 import { SwipeCard, SwipeField, SwipePanel } from "./SwipeCard";
+import { TimeSelect24 } from "./TimeSelect24";
+import { DateField } from "./DateField";
+import { addDaysISO } from "@/lib/dates";
+import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 
 export interface ActiveRental {
   deal_id: string;
@@ -58,29 +62,240 @@ function Stepper({ value, set, step = 5 }: { value: number; set: (n: number) => 
   );
 }
 
-function Section({
-  icon,
-  title,
-  danger,
-  children,
+const lbl = "text-xs text-muted block mb-1";
+
+/**
+ * Edit Reservation — dates, negotiated rate and the assigned car. Lives in its own
+ * modal (rather than a collapsible card section) so the whole screen belongs to the
+ * one booking being changed. Closes itself once the save lands.
+ */
+export function EditReservationForm({
+  rental: r,
+  onChange,
+  onClose,
 }: {
-  icon: string;
-  title: string;
-  danger?: boolean;
-  children: React.ReactNode;
+  rental: ActiveRental;
+  onChange: () => void;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const { t } = useI18n();
+  const toast = useToast();
+  const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
+  const license = useLicenseLimits();
+  // Rescheduling is the other route into an unlicensed year, so both pickers
+  // stop where the licence does — the server refuses past it either way.
+  const licenseMax = license?.max_date;
+
+  const [rate, setRate] = useState(Math.round((r.daily_rate || 0) / 100));
+  const [vehicleId, setVehicleId] = useState(r.vehicle_id);
+  const [startDate, setStartDate] = useState(r.start_dt.slice(0, 10));
+  const [returnDate, setReturnDate] = useState(r.end_dt.slice(0, 10));
+  const [startTime, setStartTime] = useState(r.start_dt.slice(11, 16) || "10:00");
+  const [returnTime, setReturnTime] = useState(r.end_dt.slice(11, 16) || "10:00");
+  const [cars, setCars] = useState<{ vehicle_id: string; make_model: string; license_plate?: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const editDays = Math.max(1, daysBetweenISO(startDate, returnDate));
+
+  useEffect(() => {
+    apiGet<{ vehicle_id: string; make_model: string; license_plate?: string }[]>("/api/vehicles/active")
+      .then(setCars)
+      .catch(() => {});
+  }, []);
+
+  async function applyEdit() {
+    setBusy(true);
+    try {
+      const startChanged = startDate && startDate !== r.start_dt.slice(0, 10);
+      const endChanged = returnDate && returnDate !== r.end_dt.slice(0, 10);
+      const startTimeChanged = startTime && startTime !== r.start_dt.slice(11, 16);
+      const endTimeChanged = returnTime && returnTime !== r.end_dt.slice(11, 16);
+      if (startChanged || endChanged || startTimeChanged || endTimeChanged) {
+        await apiPut(`/api/rentals/${r.deal_id}/dates`, {
+          start_date: startDate,
+          return_date: returnDate,
+          start_time: startTime,
+          return_time: returnTime,
+        });
+      }
+      if (rate !== Math.round((r.daily_rate || 0) / 100)) {
+        await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
+      }
+      if (vehicleId && vehicleId !== r.vehicle_id) {
+        await apiPut(`/api/rentals/${r.deal_id}/vehicle`, { vehicle_id: vehicleId });
+      }
+      toast.success(tf("reservation_updated", "Reservation updated."));
+      onChange();
+      onClose();
+    } catch (e: any) {
+      if (isLicenseError(e)) {
+        toast.error(licenseMessage(t, license));
+        return;
+      }
+      const k = e?.key || "error";
+      const fb =
+        k === "date_conflict"
+          ? "That return date overlaps another booking for this car."
+          : k === "invalid_dates"
+          ? "The return date must be after the start date."
+          : "Could not save the changes.";
+      toast.error(tf(k, fb));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div className="card overflow-hidden">
+    <div className="space-y-3">
+      <div>
+        <label className={lbl}>{tf("start_date", "Start Date")}</label>
+        {/* Time under date, same as the booking dialog. */}
+        <div className="space-y-1.5">
+          <DateField
+            value={startDate}
+            onChange={setStartDate}
+            max={licenseMax}
+            rangeStart={startDate}
+            rangeEnd={returnDate}
+            ariaLabel={tf("start_date", "Start Date")}
+          />
+          <TimeSelect24
+            value={startTime}
+            onChange={setStartTime}
+            ariaLabel={`${tf("start_date", "Start Date")} — ${tf("time", "Time")}`}
+          />
+        </div>
+      </div>
+      <div>
+        <label className={lbl}>{tf("return_date", "Return Date")}</label>
+        <div className="space-y-1.5">
+          <DateField
+            value={returnDate}
+            onChange={setReturnDate}
+            min={addDaysISO(startDate, 1)}
+            max={licenseMax}
+            rangeStart={startDate}
+            rangeEnd={returnDate}
+            ariaLabel={tf("return_date", "Return Date")}
+          />
+          <TimeSelect24
+            value={returnTime}
+            onChange={setReturnTime}
+            ariaLabel={`${tf("return_date", "Return Date")} — ${tf("time", "Time")}`}
+          />
+        </div>
+      </div>
+      <div className="text-xs text-muted -mt-1">
+        {editDays} {t("days")}
+      </div>
+      <div>
+        <label className={lbl}>{t("negotiated_rate")} (€)</label>
+        <Stepper value={rate} set={setRate} />
+      </div>
+      <div>
+        <label className={lbl}>
+          {t("change_vehicle") === "change_vehicle" ? "Change Vehicle" : t("change_vehicle")}
+        </label>
+        <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
+          {cars.map((c) => (
+            <option key={c.vehicle_id} value={c.vehicle_id}>
+              {c.vehicle_id} · {c.make_model}
+              {c.license_plate ? ` · ${c.license_plate}` : ""}
+              {c.vehicle_id === r.vehicle_id ? " · (keep)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
       <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-[rgba(17,24,39,0.03)]"
+        className="btn btn-primary w-full"
+        onClick={applyEdit}
+        disabled={busy}
+        title={tf("apply_hint", "Save the new rate / vehicle")}
       >
-        <span className="msr text-[18px]">{open ? "expand_more" : "chevron_right"}</span>
-        <span className={`msr text-[18px] ${danger ? "text-danger" : ""}`}>{icon}</span>
-        {title}
+        <span className="msr text-[16px]">check</span>
+        {busy ? "…" : tf("apply", "Apply")}
       </button>
-      {open && <div className="px-4 pb-4 pt-1 border-t border-line">{children}</div>}
+    </div>
+  );
+}
+
+/**
+ * Manage / Return — closing charges, condition notes and the return itself.
+ * Modal-hosted for the same reason as the edit form: closing a rental is a
+ * committing action and deserves an undivided screen.
+ */
+export function ManageReturnForm({
+  rental: r,
+  onChange,
+  onClose,
+}: {
+  rental: ActiveRental;
+  onChange: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const toast = useToast();
+  const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
+
+  const [penalty, setPenalty] = useState(0);
+  const [damage, setDamage] = useState(0);
+  const [notes, setNotes] = useState("");
+  const [signed, setSigned] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function processReturn() {
+    setBusy(true);
+    try {
+      await apiPost(`/api/rentals/${r.deal_id}/close`, {
+        late_euros: penalty,
+        damage_euros: damage,
+        return_notes: notes,
+        contract_signed: signed,
+      });
+      toast.success(tf("return_processed", "Return processed — rental closed."));
+      onChange();
+      onClose();
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className={lbl}>
+            {t("overdue_penalty") === "overdue_penalty" ? "Overdue Penalty (€)" : t("overdue_penalty")}
+          </label>
+          <Stepper value={penalty} set={setPenalty} />
+        </div>
+        <div>
+          <label className={lbl}>
+            {t("damage_charge") === "damage_charge" ? "Damage Charge (€)" : t("damage_charge")}
+          </label>
+          <Stepper value={damage} set={setDamage} step={10} />
+        </div>
+      </div>
+      <div>
+        <label className={lbl}>
+          {t("return_notes") === "return_notes" ? "Return / Condition Notes" : t("return_notes")}
+        </label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />
+      </div>
+      <label className="flex items-center gap-2 text-sm select-none">
+        <input type="checkbox" className="w-auto" checked={signed} onChange={(e) => setSigned(e.target.checked)} />
+        {t("contract_signed") === "contract_signed" ? "Contract Signed" : t("contract_signed")}
+      </label>
+      <button
+        className="btn btn-primary w-full"
+        onClick={processReturn}
+        disabled={busy}
+        title={tf("process_return_hint", "Close the rental, record charges, free the car")}
+      >
+        <span className="msr text-[18px]">assignment_turned_in</span>
+        {busy ? "…" : tf("process_return", "Process Return & Close")}
+      </button>
     </div>
   );
 }
@@ -97,29 +312,13 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
     return `${day} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
 
-  // Edit Reservation
-  const [rate, setRate] = useState(Math.round((r.daily_rate || 0) / 100));
-  const [vehicleId, setVehicleId] = useState(r.vehicle_id);
-  const [startDate, setStartDate] = useState(r.start_dt.slice(0, 10));
-  const [returnDate, setReturnDate] = useState(r.end_dt.slice(0, 10));
-  const [cars, setCars] = useState<{ vehicle_id: string; make_model: string; license_plate?: string }[]>([]);
-  const editDays = Math.max(1, daysBetweenISO(startDate, returnDate));
-  // Manage / Return
-  const [penalty, setPenalty] = useState(0);
-  const [damage, setDamage] = useState(0);
-  const [notes, setNotes] = useState("");
-  const [signed, setSigned] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // Print-invoice language picker — asks which language the client's invoice uses.
   const [langOpen, setLangOpen] = useState(false);
   const [invLangs, setInvLangs] = useState<Record<string, string>>({});
   const [invLang, setInvLang] = useState("");
-
-  useEffect(() => {
-    apiGet<{ vehicle_id: string; make_model: string; license_plate?: string }[]>("/api/vehicles/active")
-      .then(setCars)
-      .catch(() => {});
-  }, []);
 
   // Ask which language the client's invoice should be in before printing. The
   // picker defaults to the rental's stored invoice language (invoice-meta) and
@@ -154,57 +353,6 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
     }
   }
 
-  async function applyEdit() {
-    setBusy(true);
-    try {
-      const startChanged = startDate && startDate !== r.start_dt.slice(0, 10);
-      const endChanged = returnDate && returnDate !== r.end_dt.slice(0, 10);
-      if (startChanged || endChanged) {
-        await apiPut(`/api/rentals/${r.deal_id}/dates`, {
-          start_date: startDate,
-          return_date: returnDate,
-        });
-      }
-      if (rate !== Math.round((r.daily_rate || 0) / 100)) {
-        await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
-      }
-      if (vehicleId && vehicleId !== r.vehicle_id) {
-        await apiPut(`/api/rentals/${r.deal_id}/vehicle`, { vehicle_id: vehicleId });
-      }
-      toast.success(tf("reservation_updated", "Reservation updated."));
-      onChange();
-    } catch (e: any) {
-      const k = e?.key || "error";
-      const fb =
-        k === "date_conflict"
-          ? "That return date overlaps another booking for this car."
-          : k === "invalid_dates"
-          ? "The return date must be after the start date."
-          : "Could not save the changes.";
-      toast.error(tf(k, fb));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function processReturn() {
-    setBusy(true);
-    try {
-      await apiPost(`/api/rentals/${r.deal_id}/close`, {
-        late_euros: penalty,
-        damage_euros: damage,
-        return_notes: notes,
-        contract_signed: signed,
-      });
-      toast.success(tf("return_processed", "Return processed — rental closed."));
-      onChange();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function cancelReservation() {
     if (!confirm(`${tf("cancel_reservation", "Cancel reservation")} — ${r.vehicle_id}?`)) return;
     setBusy(true);
@@ -218,8 +366,6 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       setBusy(false);
     }
   }
-
-  const lbl = "text-xs text-muted block mb-1";
 
   // Days left until the return date (date-only, timezone-safe). Drives the header
   // chip: "Nd" upcoming, "today" on the due day, "overdue" past it.
@@ -271,8 +417,34 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
         </SwipePanel>
       </div>
 
+      {/* Working actions — each opens a focused modal. */}
       <div className="flex items-center gap-2 mt-3">
-        <button className="btn flex-1" onClick={openLangPicker} title={tf("print_invoice_hint", "Open a printable invoice for this rental")}>
+        <button
+          className="btn flex-1"
+          onClick={() => setEditOpen(true)}
+          title={tf("edit_reservation_hint", "Change dates, rate or the assigned car")}
+        >
+          <span className="msr text-[18px]">edit</span>
+          {t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}
+        </button>
+        <button
+          className="btn flex-1"
+          onClick={() => setManageOpen(true)}
+          title={tf("manage_return_hint", "Record charges and close the rental")}
+        >
+          <span className="msr text-[18px]">build</span>
+          {t("manage_return") === "manage_return" ? "Manage / Return" : t("manage_return")}
+        </button>
+      </div>
+
+      {/* Closing actions — the last things done with a departing client, so they
+          sit at the foot of the card behind a rule. */}
+      <div className="flex items-center gap-2 mt-3 pt-3 border-t border-line">
+        <button
+          className="btn flex-1"
+          onClick={openLangPicker}
+          title={tf("print_invoice_hint", "Open a printable invoice for this rental")}
+        >
           <span className="msr text-[18px]">receipt_long</span>
           {tf("print_invoice", "Print Invoice")}
         </button>
@@ -283,89 +455,33 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
           title={tf("cancel_hint", "Cancel this reservation and free the car")}
         >
           <span className="msr text-[18px]">cancel</span>
-          {tf("cancel_reservation", "Cancel")}
+          {tf("cancel_reservation", "Cancel Reservation")}
         </button>
       </div>
 
-      {/* Edit Reservation */}
-      <div className="mt-3 space-y-3">
-      <Section icon="edit" title={t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={lbl}>{tf("start_date", "Start Date")}</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className={lbl}>{tf("return_date", "Return Date")}</label>
-              <input
-                type="date"
-                min={startDate}
-                value={returnDate}
-                onChange={(e) => setReturnDate(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="text-xs text-muted -mt-1">
-            {editDays} {t("days")}
-          </div>
-          <div>
-            <label className={lbl}>{t("negotiated_rate")} (€)</label>
-            <Stepper value={rate} set={setRate} />
-          </div>
-          <div>
-            <label className={lbl}>{t("change_vehicle") === "change_vehicle" ? "Change Vehicle" : t("change_vehicle")}</label>
-            <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
-              {cars.map((c) => (
-                <option key={c.vehicle_id} value={c.vehicle_id}>
-                  {c.vehicle_id} · {c.make_model}
-                  {c.license_plate ? ` · ${c.license_plate}` : ""}
-                  {c.vehicle_id === r.vehicle_id ? " · (keep)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button className="btn btn-primary" onClick={applyEdit} disabled={busy} title={tf("apply_hint", "Save the new rate / vehicle")}>
-            <span className="msr text-[16px]">check</span>
-            {tf("apply", "Apply")}
-          </button>
-        </div>
-      </Section>
+      {editOpen && (
+        <Modal
+          title={`${
+            t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")
+          } · ${r.client_name}`}
+          onClose={() => setEditOpen(false)}
+          wide
+        >
+          <EditReservationForm rental={r} onChange={onChange} onClose={() => setEditOpen(false)} />
+        </Modal>
+      )}
 
-      {/* Manage / Return */}
-      <Section icon="build" danger title={t("manage_return") === "manage_return" ? "Manage / Return" : t("manage_return")}>
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className={lbl}>{t("overdue_penalty") === "overdue_penalty" ? "Overdue Penalty (€)" : t("overdue_penalty")}</label>
-              <Stepper value={penalty} set={setPenalty} />
-            </div>
-            <div>
-              <label className={lbl}>{t("damage_charge") === "damage_charge" ? "Damage Charge (€)" : t("damage_charge")}</label>
-              <Stepper value={damage} set={setDamage} step={10} />
-            </div>
-          </div>
-          <div>
-            <label className={lbl}>
-              {t("return_notes") === "return_notes" ? "Return / Condition Notes" : t("return_notes")}
-            </label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />
-          </div>
-          <label className="flex items-center gap-2 text-sm select-none">
-            <input type="checkbox" className="w-auto" checked={signed} onChange={(e) => setSigned(e.target.checked)} />
-            {t("contract_signed") === "contract_signed" ? "Contract Signed" : t("contract_signed")}
-          </label>
-          <button className="btn btn-primary w-full" onClick={processReturn} disabled={busy} title={tf("process_return_hint", "Close the rental, record charges, free the car")}>
-            <span className="msr text-[18px]">assignment_turned_in</span>
-            {tf("process_return", "Process Return & Close")}
-          </button>
-        </div>
-      </Section>
-      </div>
+      {manageOpen && (
+        <Modal
+          title={`${
+            t("manage_return") === "manage_return" ? "Manage / Return" : t("manage_return")
+          } · ${r.client_name}`}
+          onClose={() => setManageOpen(false)}
+          wide
+        >
+          <ManageReturnForm rental={r} onChange={onChange} onClose={() => setManageOpen(false)} />
+        </Modal>
+      )}
 
       {/* Print-invoice language picker — choose the client's language, then open
           the printable invoice in that language. */}

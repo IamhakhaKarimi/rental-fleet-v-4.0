@@ -56,7 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         remember,
       });
-      setAuthToken(res.token);
+      // Same choice the backend applied to the token's lifetime decides whether
+      // it is persisted to disk or only for this browser session.
+      setAuthToken(res.token, remember);
       setUser(res.user);
     },
     []

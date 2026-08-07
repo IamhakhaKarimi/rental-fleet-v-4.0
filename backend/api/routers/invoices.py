@@ -2,7 +2,7 @@
 
 Reuses ui/invoice.build_invoice_html + ui/pdf.build_invoice_pdf verbatim (now
 Streamlit-free). Language defaults to the rental's stored invoice_lang; any of the
-six LANGUAGES may be requested. Logo/stamp come from app_settings.
+supported LANGUAGES may be requested. Logo/stamp come from app_settings.
 """
 from __future__ import annotations
 

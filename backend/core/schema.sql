@@ -53,9 +53,13 @@ CREATE TABLE IF NOT EXISTS charges (
     charge_id   INTEGER PRIMARY KEY AUTOINCREMENT,
     deal_id     TEXT REFERENCES rentals(deal_id),
     vehicle_id  TEXT REFERENCES vehicles(vehicle_id),
-    type        TEXT NOT NULL CHECK (type IN ('rental','overdue_penalty','damage','deposit','refund')),
+    type        TEXT NOT NULL CHECK (type IN (
+                    'rental','overdue_penalty','damage','deposit','refund',
+                    'mechanic_fee','traffic_fine','cleaning_fee','fuel_shortage','lost_item','other'
+                )),
     amount      INTEGER NOT NULL,   -- cents
-    occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+    occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+    note        TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS vehicle_costs (
@@ -77,6 +81,10 @@ CREATE TABLE IF NOT EXISTS users (
     is_active     INTEGER NOT NULL DEFAULT 1,
     lang          TEXT NOT NULL DEFAULT 'tr',   -- the user's preferred UI language
     email         TEXT NOT NULL DEFAULT '',     -- for password-recovery delivery
+    -- ISO datetime of the last password change. Any access token issued before
+    -- this instant is rejected, so a reset immediately logs out existing sessions.
+    -- Empty string = never changed since the column was introduced.
+    password_changed_at TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -85,6 +93,27 @@ CREATE TABLE IF NOT EXISTS sessions (
     username    TEXT NOT NULL,
     expires_at  TEXT NOT NULL,           -- ISO datetime
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Password-reset tickets. Only the SHA-256 of the emailed token is stored, so a
+-- database leak cannot be replayed as a reset link. Single use (used_at) and
+-- short-lived (expires_at); the password is NOT touched until the link is opened
+-- and a new one is submitted.
+CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash  TEXT PRIMARY KEY,
+    username    TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,           -- ISO datetime
+    used_at     TEXT,                    -- NULL until redeemed
+    requested_ip TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Failed-login throttling. One row per username; cleared on a successful login.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    username     TEXT PRIMARY KEY,
+    fails        INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,                   -- ISO datetime while locked out
+    last_try     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -134,3 +163,5 @@ CREATE INDEX IF NOT EXISTS idx_charges_vehicle  ON charges(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_costs_vehicle    ON vehicle_costs(vehicle_id, period_date);
 CREATE INDEX IF NOT EXISTS idx_vphotos_vehicle  ON vehicle_photos(vehicle_id, position, photo_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_presets_user      ON password_resets(username);
+CREATE INDEX IF NOT EXISTS idx_presets_expires   ON password_resets(expires_at);

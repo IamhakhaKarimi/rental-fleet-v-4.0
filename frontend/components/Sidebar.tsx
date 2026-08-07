@@ -1,12 +1,35 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can } from "@/lib/perms";
+import { isNavActive, routeFor } from "@/lib/nav";
 import { Bell } from "./Bell";
 import type { BusinessInfo, NavItem } from "@/lib/types";
+
+/** Row face shared by every sidebar entry. `active` and `expanded` are the only
+ *  things that vary, so keeping it here stops the call sites below from drifting
+ *  apart. Two deliberate details:
+ *
+ *  - Hover is gated behind `lg:`; on a touch tablet a `:hover` state sticks after
+ *    the tap, so those viewports get `active:` instead. Desktop keeps the
+ *    original hover exactly.
+ *  - The inactive ink stays the literal `#3F3F46` it has always been in light
+ *    mode, so desktop renders unchanged, with `dark:text-muted` layered on top —
+ *    that hardcoded grey is all but invisible on night mode's #232427 surface.
+ */
+const rowBase =
+  "w-full flex items-center gap-3 rounded-pill px-3 py-2 min-h-[44px] text-[0.78rem] transition-colors";
+const rowIdle =
+  "text-[#3F3F46] dark:text-muted active:bg-[rgba(17,24,39,0.08)] lg:hover:bg-[rgba(17,24,39,0.05)]";
+
+const rowClass = (active: boolean, expanded: boolean) =>
+  `${rowBase} font-medium ${
+    active ? "bg-[rgba(17,24,39,0.07)] text-ink font-semibold" : rowIdle
+  } ${expanded ? "" : "justify-center"}`;
 
 export function Sidebar() {
   const t = useT();
@@ -24,16 +47,15 @@ export function Sidebar() {
     apiGet<BusinessInfo>("/api/business/name").then(setBiz).catch(() => {});
   }, []);
 
-  // Collapse to the icon rail on narrow viewports (≤768px), expand on wide.
+  // Pick the *initial* face once, on mount: the labelled 236px sidebar on
+  // desktop, the 64px icon rail on tablet. Deliberately not a resize listener —
+  // the old one re-ran on every resize and orientation change, silently undoing
+  // whatever the user had chosen with the toggle below.
   useEffect(() => {
-    const apply = () => setExpanded(window.innerWidth >= 768);
-    apply();
-    window.addEventListener("resize", apply);
-    return () => window.removeEventListener("resize", apply);
+    setExpanded(window.innerWidth >= 1024);
   }, []);
 
-  const routeFor = (k: string) => (k === "dashboard" ? "/" : `/${k}`);
-  const isActive = (k: string) => pathname === routeFor(k);
+  const isActive = (k: string) => isNavActive(k, pathname);
 
   async function doLogout() {
     await logout();
@@ -43,8 +65,10 @@ export function Sidebar() {
   const roleLabel = user ? t(user.role_label_key) : "";
 
   return (
+    // Phone gets the bottom bar + burger sheet instead; this whole column is
+    // hidden below 768px so `<main>` can use the full width.
     <aside
-      className={`shrink-0 border-r border-line bg-surface/40 sticky top-0 h-screen self-start overflow-hidden flex flex-col transition-[width] duration-200 ${
+      className={`hidden md:flex shrink-0 border-r border-line bg-surface/40 sticky top-0 h-[100dvh] self-start overflow-hidden flex-col transition-[width] duration-200 ${
         expanded ? "w-[236px]" : "w-[64px]"
       }`}
     >
@@ -53,6 +77,7 @@ export function Sidebar() {
           onClick={() => setExpanded((v) => !v)}
           className="btn !p-2 !border-0 !bg-transparent"
           aria-label="Toggle menu"
+          aria-expanded={expanded}
         >
           <span className="msr text-[22px]">{expanded ? "menu_open" : "menu"}</span>
         </button>
@@ -70,48 +95,42 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 px-2 space-y-1 mt-2 overflow-y-auto">
-        {nav.map((item) => {
-          const active = isActive(item.key);
-          return (
-            <button
-              key={item.key}
-              onClick={() => router.push(routeFor(item.key))}
-              className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] font-medium transition-colors ${
-                active ? "bg-[rgba(17,24,39,0.07)] text-ink font-semibold" : "text-[#3F3F46] hover:bg-[rgba(17,24,39,0.05)]"
-              } ${expanded ? "" : "justify-center"}`}
-              title={t(item.label_key)}
-            >
-              <span className="msr text-[20px]">{item.icon}</span>
-              {expanded && <span className="truncate">{t(item.label_key)}</span>}
-            </button>
-          );
-        })}
+        {nav.map((item) => (
+          <Link
+            key={item.key}
+            href={routeFor(item.key)}
+            className={rowClass(isActive(item.key), expanded)}
+            title={t(item.label_key)}
+            aria-current={isActive(item.key) ? "page" : undefined}
+          >
+            <span className="msr text-[20px] shrink-0">{item.icon}</span>
+            {expanded && <span className="truncate">{t(item.label_key)}</span>}
+          </Link>
+        ))}
       </nav>
 
       {/* Footer: notifications bell + settings + account */}
       <div className="p-2 border-t border-line space-y-1 relative">
         {can(user, "create_reservation") && <Bell expanded={expanded} />}
 
-        <button
-          onClick={() => router.push("/settings")}
-          className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] font-medium ${
-            isActive("settings")
-              ? "bg-[rgba(17,24,39,0.07)] text-ink font-semibold"
-              : "text-[#3F3F46] hover:bg-[rgba(17,24,39,0.05)]"
-          } ${expanded ? "" : "justify-center"}`}
+        <Link
+          href="/settings"
+          className={rowClass(isActive("settings"), expanded)}
           title={t("nav_settings")}
+          aria-current={isActive("settings") ? "page" : undefined}
         >
-          <span className="msr text-[20px]">settings</span>
+          <span className="msr text-[20px] shrink-0">settings</span>
           {expanded && <span className="truncate">{t("nav_settings")}</span>}
-        </button>
+        </Link>
 
         <button
           onClick={() => setAcct((v) => !v)}
-          className={`w-full flex items-center gap-3 rounded-pill px-3 py-2 text-[0.78rem] hover:bg-[rgba(17,24,39,0.05)] ${
+          className={`${rowBase} active:bg-[rgba(17,24,39,0.08)] lg:hover:bg-[rgba(17,24,39,0.05)] ${
             expanded ? "" : "justify-center"
           }`}
+          aria-expanded={acct}
         >
-          <span className="msr text-[20px]">account_circle</span>
+          <span className="msr text-[20px] shrink-0">account_circle</span>
           {expanded && <span className="truncate text-ink">{user?.full_name}</span>}
         </button>
 
@@ -124,7 +143,7 @@ export function Sidebar() {
             <div className="border-t border-line my-1" />
             <button
               onClick={doLogout}
-              className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-danger hover:bg-[rgba(220,38,38,0.08)]"
+              className="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 min-h-[44px] text-sm text-danger active:bg-[rgba(220,38,38,0.12)] lg:hover:bg-[rgba(220,38,38,0.08)]"
             >
               <span className="msr text-[18px]">logout</span>
               {t("logout")}

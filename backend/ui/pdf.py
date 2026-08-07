@@ -573,6 +573,269 @@ def build_report_pdf(title: str, headers: list[str], rows: list[list],
     return bytes(pdf.output())
 
 
+def _wrap2(pdf, value, width: float) -> tuple[str, str]:
+    """Split a column header over at most two lines to fit `width`. Returns
+    (line1, line2) with line2 empty when the whole label fits on one. A single
+    word too long for the column still gets ellipsised — there's nowhere to break."""
+    s = _txt(value).strip()
+    if pdf.get_string_width(s) <= width - 2:
+        return s, ""
+    words = s.split()
+    if len(words) > 1:
+        # Longest prefix that fits; the rest goes on line two.
+        for cut in range(len(words) - 1, 0, -1):
+            head = " ".join(words[:cut])
+            tail = " ".join(words[cut:])
+            if pdf.get_string_width(head) <= width - 2:
+                return head, _fit(pdf, tail, width)
+    return _fit(pdf, s, width), ""
+
+
+_ZEBRA = (248, 246, 242)   # near-white row band, subtler than the header's _LIGHT
+
+
+def _split_token(pdf, word: str, width: float) -> list[str]:
+    """Break a single space-free token that's too wide for its column into pieces
+    that fit — used for dates ("2026-07-27"), plates and IDs, none of which have a
+    space to word-wrap on. Snaps each break to just after a '-' or '/' where one
+    falls inside the piece, so a date reads as "2026-07-" / "27" rather than
+    splitting mid-digit; falls back to a raw character cut when there's no such
+    separator nearby (e.g. a long ID)."""
+    if pdf.get_string_width(word) <= width - 2:
+        return [word]
+    breaks = [i + 1 for i, ch in enumerate(word) if ch in "-/"]
+    pieces: list[str] = []
+    start = 0
+    while start < len(word):
+        end = start
+        for j in range(start + 1, len(word) + 1):
+            if pdf.get_string_width(word[start:j]) <= width - 2:
+                end = j
+            else:
+                break
+        end = max(end, start + 1)  # always progress, even in an absurdly narrow column
+        snap = max((b for b in breaks if start < b <= end), default=None)
+        pieces.append(word[start:(snap or end)])
+        start = snap or end
+    return pieces
+
+
+def _wrap_lines(pdf, value, width: float, max_lines: int = 3) -> list[str]:
+    """Word-wrap a cell value to fit `width`, growing to multiple lines instead of
+    ellipsising — used for table BODY cells, where truncating a date, a plate or a
+    long name is actually misleading (an ellipsised date looks like a shorter one).
+    A space-free value that alone doesn't fit (a date, an ID) is still broken into
+    further lines via `_split_token` rather than ellipsised. A value that would
+    need more than `max_lines` is truncated on the last line so one pathological
+    cell can't blow out the whole row height."""
+    s = _txt(value).strip()
+    if not s:
+        return [""]
+    if pdf.get_string_width(s) <= width - 2:
+        return [s]
+    words = s.split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if pdf.get_string_width(trial) <= width - 2:
+            cur = trial
+            continue
+        if cur:
+            lines.append(cur)
+        if pdf.get_string_width(w) <= width - 2:
+            cur = w
+        else:
+            pieces = _split_token(pdf, w, width)
+            lines.extend(pieces[:-1])
+            cur = pieces[-1]
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _fit(pdf, lines[-1], width)
+    return lines or [""]
+
+
+def build_paged_table_pdf(title: str, headers: list[str], rows: list[list],
+                          business_name: str = "", logo: str = "",
+                          meta: list = None, page_size: int = 25,
+                          col_weights: list[float] = None,
+                          page_label: str = "Page", of_label: str = "of") -> bytes:
+    """Branded LANDSCAPE-A4 report paginated by both row count and page height.
+
+    Landscape (273mm usable width vs portrait's 180mm) gives a wide column set —
+    every column ticked in the report modal — room to breathe. Body cells wrap
+    onto extra lines rather than ellipsising (`_wrap_lines`): a date or plate
+    number that doesn't fit its column is still fully readable, just on two
+    lines, and the row's border grows to match whichever cell wrapped the most.
+
+    Pagination is therefore no longer a fixed row count alone: a page fills up to
+    `page_size` rows UNLESS the accumulated wrapped height would overrun the page
+    first, in which case it breaks early. Because the header/footer chrome is
+    identical on every page, a first "measuring" pass (same font, same widths, no
+    drawing) computes every row's wrapped height up front, so the exact page
+    breaks — and therefore the total page count — are known before anything is
+    rendered, and the footer can read "Page 2 of 7" without a second pass.
+
+    `col_weights` are relative column widths (defaults to equal). All cell values
+    must already be display strings."""
+    pdf, F = _new_pdf("L")
+    # Our own chunking decides where pages break — auto-break would fire early and
+    # split a row/page mid-table, desynchronising the footer's page count.
+    pdf.set_auto_page_break(auto=False)
+    L, R = 12, 285             # usable width 273mm (A4 landscape)
+    FOOT_Y = 196               # baseline of the page-number footer (A4 landscape height 210mm)
+    CONTENT_BOTTOM = FOOT_Y - 3
+
+    LINE_H = 4.2               # one wrapped text line at the body font size
+    ROW_PAD = 2.2              # vertical padding baked into every row's height
+
+    page_size = max(1, int(page_size or 25))
+    ncol = max(1, len(headers))
+    weights = list(col_weights or [])
+    if len(weights) != ncol or sum(weights) <= 0:
+        weights = [1.0] * ncol
+    scale = (R - L) / sum(weights)
+    widths = [w * scale for w in weights]
+
+    def _page_head():
+        y = 12
+        stream = _logo_stream(logo)
+        if stream is not None:
+            try:
+                pdf.image(stream, x=L, y=y, w=28)
+                y += 12
+            except Exception:
+                pass
+        pdf.set_xy(L, y)
+        pdf.set_font(F, "B", 13)
+        pdf.set_text_color(*_TEXT)
+        pdf.cell(0, 6, text=_txt(business_name) or APP_NAME, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_x(L)
+        pdf.set_font(F, "B", 10.5)
+        pdf.set_text_color(*_ACCENT)
+        pdf.cell(0, 6, text=_txt(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(1)
+        yy = pdf.get_y()
+        pdf.set_draw_color(*_ACCENT)
+        pdf.set_line_width(0.5)
+        pdf.line(L, yy, R, yy)
+        pdf.ln(2.2)
+        if meta:
+            pdf.set_font(F, "", 8)
+            # Metadata pairs flow left-to-right and wrap onto a second line once
+            # they'd run off the wide landscape header, instead of one pair per row.
+            x = L
+            for label, value in meta:
+                seg = f"{_txt(label)}: {_txt(value)}"
+                w = pdf.get_string_width(seg) + 8
+                if x > L and x + w > R:
+                    pdf.ln(4.4)
+                    x = L
+                pdf.set_xy(x, pdf.get_y())
+                pdf.set_text_color(*_MUTED)
+                pdf.set_font(F, "", 8)
+                pdf.cell(pdf.get_string_width(f"{_txt(label)}: "), 4.4, text=f"{_txt(label)}: ")
+                pdf.set_text_color(*_TEXT)
+                pdf.cell(pdf.get_string_width(_txt(value)) + 2, 4.4, text=_txt(value))
+                x += w
+            pdf.ln(4.4)
+            pdf.ln(1.3)
+        # Column headers. Translated labels are full field names ("Telefon /
+        # WhatsApp", "Anlaşılan Günlük Ücret") and would ellipsise to nonsense in a
+        # narrow column, so a header that doesn't fit wraps onto a second line
+        # instead — the row grows for everyone and stays legible.
+        pdf.set_font(F, "B", 8)
+        pdf.set_text_color(*_MUTED)
+        pdf.set_fill_color(*_LIGHT)
+        wrapped = [_wrap2(pdf, h, widths[i]) for i, h in enumerate(headers)]
+        two = any(l2 for _, l2 in wrapped)
+        H = 9.6 if two else 7.0
+        y0 = pdf.get_y()
+        x = L
+        for i, (l1, l2) in enumerate(wrapped):
+            pdf.set_xy(x, y0)
+            pdf.cell(widths[i], H, text="", border=0, fill=True)
+            pdf.set_xy(x, y0 + (0.7 if two else 1.3))
+            pdf.cell(widths[i], 4.3, text=l1)
+            if l2:
+                pdf.set_xy(x, y0 + 4.9)
+                pdf.cell(widths[i], 4.3, text=l2)
+            x += widths[i]
+        pdf.set_xy(L, y0 + H)
+
+    def _page_foot(idx: int, total: int):
+        pdf.set_xy(L, FOOT_Y)
+        pdf.set_draw_color(*_LIGHT)
+        pdf.set_line_width(0.3)
+        pdf.line(L, FOOT_Y - 1.5, R, FOOT_Y - 1.5)
+        pdf.set_font(F, "", 8)
+        pdf.set_text_color(*_MUTED)
+        pdf.cell((R - L) / 2, 5, text=_txt(business_name) or APP_NAME)
+        pdf.cell((R - L) / 2, 5, text=f"{page_label} {idx} {of_label} {total}", align="R")
+
+    def _row_lines(row: list) -> list[list[str]]:
+        return [_wrap_lines(pdf, row[i] if i < len(row) else "", widths[i]) for i in range(ncol)]
+
+    # ── Pass 1: measure. Draw page 1's header once (it's identical on every
+    # page, since it's built from the same title/meta/headers each time) to learn
+    # the fixed y where rows start, then — with the body font active, so string
+    # widths match what will actually render — wrap every row and accumulate
+    # row heights into page-sized chunks. Nothing here is final ink: page 1's
+    # header is simply reused for real below instead of being redrawn.
+    # _new_pdf() already created page 1 — draw the (identical-on-every-page)
+    # header straight onto it rather than adding a second, leaving a blank sheet.
+    _page_head()
+    start_y = pdf.get_y()
+    pdf.set_font(F, "", 8.5)
+    avail_h = max(LINE_H + ROW_PAD, CONTENT_BOTTOM - start_y)
+
+    wrapped_rows = [_row_lines(row) for row in rows]
+    row_heights = [max((len(c) for c in wr), default=1) * LINE_H + ROW_PAD for wr in wrapped_rows]
+
+    chunks: list[list[int]] = []
+    cur: list[int] = []
+    cur_h = 0.0
+    for idx, h in enumerate(row_heights):
+        if cur and (len(cur) >= page_size or cur_h + h > avail_h):
+            chunks.append(cur)
+            cur, cur_h = [], 0.0
+        cur.append(idx)
+        cur_h += h
+    chunks.append(cur)  # always at least one page, even with zero rows
+    total = len(chunks)
+
+    # ── Pass 2: render, reusing page 1's already-drawn header.
+    for n, idxs in enumerate(chunks, start=1):
+        if n > 1:
+            pdf.add_page()
+            _page_head()
+        pdf.set_font(F, "", 8.5)
+        pdf.set_text_color(*_TEXT)
+        pdf.set_draw_color(*_LIGHT)
+        for pos, ridx in enumerate(idxs):
+            y0 = pdf.get_y()
+            row_h = row_heights[ridx]
+            if pos % 2 == 1:  # zebra striping — keeps wrapped multi-line rows
+                pdf.set_fill_color(*_ZEBRA)  # visually separated from their neighbours
+                pdf.rect(L, y0, R - L, row_h, style="F")
+            x = L
+            for i, lines in enumerate(wrapped_rows[ridx]):
+                yy = y0 + 1.0
+                for text in lines:
+                    pdf.set_xy(x, yy)
+                    pdf.cell(widths[i], LINE_H, text=text)
+                    yy += LINE_H
+                x += widths[i]
+            pdf.set_draw_color(*_LIGHT)
+            pdf.line(L, y0 + row_h, R, y0 + row_h)
+            pdf.set_xy(L, y0 + row_h)
+        _page_foot(n, total)
+
+    return bytes(pdf.output())
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Software-license invoice
 # ──────────────────────────────────────────────────────────────────────────────

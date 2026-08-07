@@ -216,11 +216,19 @@ def reset_password(username: str,
     ok, msg, info = auth_service.admin_recover_child(actor, username)
     if not ok:
         raise HTTPException(http.HTTP_400_BAD_REQUEST, detail=msg)
-    audit_service.record(actor, "reset_password", "user", username)
+    audit_service.record(actor, "reset_password", "user", username,
+                         f"method={info.get('method', '')}")
     sent = bool(info.get("sent"))
     return {
         "ok": True,
+        # "link"  -> a reset link was mailed to that user's own address.
+        # "temp_password" -> they have no address on file, so a temporary password
+        #                    is handed to this admin to pass on out-of-band.
+        "method": info.get("method", ""),
         "sent": sent,
         "recipient": info.get("recipient", ""),
-        "new_password": "" if sent else info.get("new_password", ""),
+        "new_password": info.get("new_password", ""),
+        # Only populated when SMTP is unconfigured, for an already-authenticated
+        # admin who would otherwise have no way to deliver the link.
+        "reset_link": "" if sent else info.get("reset_link", ""),
     }

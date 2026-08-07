@@ -200,6 +200,15 @@ h1, h2, h3, h4, h5, h6 {
   }
   .btn-primary:hover { background: var(--accent-hover); }
   .btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  /* Soft/reversible destructive action (Archive) — visually lighter than the
+     permanent Delete's solid .btn-danger, so the two read as different weights
+     of "destructive" at a glance. */
+  .btn-danger-soft {
+    background: color-mix(in oklab, var(--danger) 12%, var(--surface));
+    color: var(--danger);
+    border-color: color-mix(in oklab, var(--danger) 25%, var(--border));
+  }
+  .btn-danger-soft:hover { background: color-mix(in oklab, var(--danger) 20%, var(--surface)); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
   /* Status badge — token classes from STATUS_TOKEN ------------------------- */
@@ -554,6 +563,72 @@ h1, h2, h3, h4, h5, h6 {
     border-radius: 11px;
   }
 
+  /* Shared vehicle card (components/VehicleCard.tsx) — one design used by both
+     the Fleet page and the Landing page's "Cars Available in This Window"
+     cards. No avatar/band; just a plain photo, bold name, combined
+     year/plate/color/mileage reference line, an availability indicator and a
+     price tag, with a page-specific footer (buttons) below. */
+  /* Inset margin around the photo (~3% on every side) so it floats inside the
+     card instead of running flush to the edges; the image/placeholder inside
+     now carries its own all-around rounding (passed via className) since
+     it's no longer flush with the card's top corners. */
+  .veh-card-photo {
+    padding: 3%;
+  }
+  .veh-card-name {
+    font-family: "Space Grotesk", var(--font-display);
+    font-weight: 700;
+    font-size: 19px;
+    letter-spacing: 0.2px;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+
+  /* Single dynamic availability indicator — a plain colored bullet + label
+     (no pill/background) merging what used to be a separate stored-status
+     badge and a "locked/Rented" badge: green when free to rent, red when it
+     isn't (rented right now, regardless of the stored status column). Reuses
+     the finance dashboard's existing green/red tokens rather than inventing
+     new ones. */
+  .avail-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .avail-chip::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  .avail-chip-success { color: var(--fin-up-ink); }
+  .avail-chip-alert { color: var(--danger); }
+
+  /* Blue "Rent" pill CTA (Landing page card) — distinct from the app's
+     monochrome .btn-primary so the booking action pops on an otherwise
+     black/white fleet UI. Reuses the existing chart-income blue token. */
+  .btn-rent {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 13px 20px;
+    border-radius: 999px;
+    border: none;
+    background: var(--fin-chart-income);
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.06s ease;
+  }
+  .btn-rent:hover { background: color-mix(in oklab, var(--fin-chart-income) 85%, black); }
+  .btn-rent:active { transform: translateY(1px); }
+
   /* Visitor hero ----------------------------------------------------------- */
   .visitor-hero {
     background: linear-gradient(135deg, #1A1C1E, #3F3F46);
@@ -579,11 +654,640 @@ input:focus, select:focus, textarea:focus {
 }
 .uppercase-input { text-transform: uppercase; }
 
+/* ===========================================================================
+   DateField (components/DateField.tsx) — the app's single date control.
+   Trigger deliberately mirrors the plain `input` rule above (same background,
+   border, radius, padding, focus ring) so a date field is indistinguishable
+   from a text field until it's opened. Everything themes off the tokens, so it
+   follows night mode and any super-admin recolour.
+   =========================================================================== */
+.df-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 9px 11px;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.df-trigger:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
+.df-trigger:focus-visible, .df-trigger.is-open { outline: 2px solid var(--accent); outline-offset: 0; }
+.df-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.df-trigger-icon { font-size: 17px; color: var(--muted); flex: none; }
+.df-trigger-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Weekday prefix — muted so the numeric date stays the thing you read. */
+.df-trigger-dow {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+}
+.df-trigger-caret { font-size: 17px; color: var(--muted); flex: none; }
+
+/* Compact face — icon + date only, sized to its content. Used where several
+   date/time controls share one line and the field must not set the row width. */
+.df-trigger.is-compact {
+  width: auto;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.df-trigger.is-compact .df-trigger-icon { font-size: 15px; }
+.df-trigger.is-compact .df-trigger-text { flex: none; }
+
+/* Popover. z-index clears the Modal overlay (z-50) — the picker is opened FROM
+   dialogs (booking, edit reservation) and must paint above them. */
+.df-pop {
+  position: fixed;
+  z-index: 60;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+  padding: 9px;
+  user-select: none;
+}
+/* Preset rail | month. The rail is a fixed column so the month grid keeps the
+   same width it had before the rail existed. */
+.df-body { display: flex; align-items: stretch; gap: 9px; }
+.df-cal { width: 230px; flex: none; }
+.df-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 105px;
+  flex: none;
+  padding-right: 9px;
+  border-right: 1px solid var(--border);
+}
+.df-preset {
+  text-align: left;
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.df-preset:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.df-preset:disabled { opacity: 0.35; cursor: not-allowed; }
+/* The preset that happens to name the selected day, so the rail reflects state
+   rather than being a row of write-only buttons. */
+.df-preset.is-on {
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.df-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.df-period { display: flex; align-items: center; gap: 2px; min-width: 0; }
+/* Month/year pickers. Overrides the global `select` rule (100% width, 9px
+   padding) — inside a 230px month these have to be text, not form fields. */
+.df-sel {
+  width: auto;
+  max-width: 96px;
+  padding: 2px 2px 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--text);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+.df-sel-year { max-width: 62px; font-variant-numeric: tabular-nums; }
+.df-sel:hover { border-color: var(--border); background: var(--bg); }
+.df-sel:focus { outline: 2px solid var(--accent); }
+.df-nav {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
+.df-nav:hover { background: var(--surface); }
+.df-dow, .df-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.df-dow {
+  margin-bottom: 4px;
+}
+.df-dow span {
+  text-align: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: 2px;
+}
+.df-day {
+  height: 29px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.df-day:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.df-day:disabled { opacity: 0.28; cursor: not-allowed; }
+/* Spill-over days from the neighbouring months — kept visible but recessive so
+   the six-row grid never changes height between months. */
+.df-day-out { color: var(--muted); opacity: 0.55; }
+.df-day-today { border-color: var(--accent); font-weight: 700; }
+/* Nights between pick-up and return (display only — passed in by the caller). */
+.df-day-range { background: color-mix(in oklab, var(--accent) 9%, transparent); border-radius: 0; }
+.df-day-edge { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.df-day-on {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.df-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.df-quick {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.df-quick:hover:not(:disabled) { color: var(--text); background: var(--bg); }
+.df-quick:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Echo of the current value — the compact trigger drops the weekday, so the
+   footer is where you confirm you picked what you meant to. */
+.df-foot-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  padding-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===========================================================================
+   TimeSelect24 (components/TimeSelect24.tsx). Deliberately shares DateField's
+   trigger (.df-trigger) so a date and a time next to each other read as one
+   control split in two; only the dropdown differs — a scrolling list of times
+   rather than a month grid.
+   =========================================================================== */
+.tf-pop {
+  position: fixed;
+  z-index: 60;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+  padding: 7px;
+  user-select: none;
+}
+.tf-list {
+  max-height: 224px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tf-opt {
+  text-align: left;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tf-opt:hover { background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.tf-opt.is-on {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 700;
+}
+/* Values that aren't on the 15-minute grid (an older booking saved at 09:07)
+   stay selectable rather than being silently rounded away. */
+.tf-opt.is-odd { color: var(--muted); }
+
+/* ===========================================================================
+   Live invoice preview (components/InvoicePreview.tsx) — the miniature document
+   shown beside the booking form. Mirrors ui/invoice.py's structure, but themed
+   off the app tokens (not the PDF's print CSS) so it follows night mode.
+   =========================================================================== */
+.inv-prev {
+  container-type: inline-size;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.inv-prev-sheet {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.07);
+  color: var(--text);
+}
+.inv-prev-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1.5px solid var(--text);
+}
+.inv-prev-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+.inv-prev-brand small {
+  display: block;
+  font-weight: 500;
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.inv-prev-title { text-align: right; flex: none; }
+.inv-prev-title h4 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  margin: 0 0 2px;
+}
+.inv-prev-meta { font-size: 8.5px; color: var(--muted); }
+.inv-prev-meta b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.inv-prev-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 9px 0;
+}
+.inv-prev-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  min-width: 0;
+}
+.inv-prev-lbl {
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.inv-prev-lbl.inline { display: inline; margin: 0; }
+.inv-prev-val { font-size: 9.5px; word-break: break-word; }
+
+.inv-prev-table { width: 100%; border-collapse: collapse; font-size: 9.5px; }
+.inv-prev-table th {
+  text-align: left;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding: 4px 5px;
+}
+.inv-prev-table td {
+  padding: 6px 5px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.inv-prev-table .num { text-align: right; }
+
+.inv-prev-totals {
+  margin: 8px 0 0 auto;
+  width: min(190px, 62%);
+  font-size: 9.5px;
+}
+.inv-prev-totals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.inv-prev-totals .grand {
+  border-top: 1.5px solid var(--text);
+  margin-top: 3px;
+  padding-top: 5px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+/* Terms placeholder — the real PDF prints 13 numbered rules; the preview only
+   needs to show that the block is there, so it's rendered as ruled lines. */
+.inv-prev-terms { margin-top: 10px; }
+.inv-prev-terms-lines { display: grid; gap: 3px; margin-top: 3px; }
+.inv-prev-terms-lines i {
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--text) 11%, transparent);
+}
+.inv-prev-terms-lines i:nth-child(2) { width: 92%; }
+.inv-prev-terms-lines i:nth-child(3) { width: 97%; }
+.inv-prev-terms-lines i:nth-child(4) { width: 68%; }
+.inv-prev-foot {
+  margin-top: 9px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 8px;
+  color: var(--muted);
+}
+
+/* ===========================================================================
+   Admin Panel (app/(app)/admin) — staff-by-role list + the checkbox matrix of
+   roles x permissions. Same monochrome token vocabulary as the rest of the app;
+   nothing here introduces a new colour.
+   =========================================================================== */
+/* The four role groups sit side by side in a single row so Staff Accounts costs
+   one card's height instead of four stacked bands. auto-fit rather than a fixed
+   repeat(4): it drops to two columns, then one, as the space narrows, and an
+   admin — who only ever sees two of the four roles — gets two full-width cards
+   instead of two narrow ones next to a pair of empty tracks. Driven by the
+   container, not the viewport, which matters because the sidebar takes its cut
+   before this grid sees any width. */
+.staff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.staff-row {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.staff-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.staff-count {
+  margin-left: auto;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  letter-spacing: 0;
+}
+/* One column inside each role card — the columns ARE the roles now. */
+.staff-row-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+/* Identity on the first line, role + activation on the second: a quarter-width
+   column can't hold all four on one line without truncating the name. */
+.staff-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  min-width: 0;
+}
+.staff-id { flex: 1 1 120px; min-width: 0; }
+.staff-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+/* A deactivated account stays listed but visibly recedes. */
+.staff-chip.is-off { opacity: 0.55; }
+.staff-avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--bg);
+  font-family: "Space Grotesk", var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+}
+.staff-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.staff-sub {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.66rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.staff-role { width: auto; min-width: 0; flex: 1 1 auto; }
+
+/* ── Permission matrix ─────────────────────────────────────────────────── */
+.perm-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+.perm-matrix th, .perm-matrix td { padding: 8px 10px; }
+.perm-head-label {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.perm-head-role {
+  border-bottom: 1px solid var(--border);
+  width: 108px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  white-space: nowrap;
+}
+.perm-head-role small {
+  display: block;
+  color: var(--muted);
+  margin-top: 1px;
+}
+/* Category band — the "categorized in rows" grouping. */
+.perm-group-row td {
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.perm-label {
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.perm-lock { font-size: 14px; color: var(--muted); }
+.perm-cell { border-bottom: 1px solid var(--border); text-align: center; }
+
+/* The checkbox itself: a square token, filled when granted. The native input is
+   kept (focusable, keyboard-operable, screen-reader labelled) but visually
+   replaced so it themes with the app instead of the OS. */
+.perm-box {
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.perm-box input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.perm-box .msr { font-size: 16px; pointer-events: none; }
+.perm-box:hover:not(.is-fixed) { border-color: var(--accent); }
+.perm-box:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.perm-box.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+/* Read-only cell (locked permission, or a role this operator may not edit). */
+.perm-box.is-fixed { opacity: 0.5; cursor: not-allowed; }
+/* A cell that no longer matches the shipped baseline — a dot so an operator can
+   see at a glance which rules were changed by hand. */
+.perm-box.is-changed::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--cal-warn);
+  border: 1.5px solid var(--surface);
+}
+
+/* Generic scrollbar-track hider for scrollers that carry their own affordance
+   (scrolling still works via touch/wheel/drag). */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 /* Responsive (≤640px): stack, clamp, larger tap targets — matches theme.py. */
 @media (max-width: 640px) {
   .kpi-value { font-size: 1.6rem; }
   .btn { min-height: 44px; white-space: normal; }
 }
+
+/* The phone/tablet layer lives at the very END of this file — see
+   "Phone + tablet layer" below. It has to be last in source order: rules like
+   `.seg-btn` and `.cal-bar:hover` are declared further down at the same
+   specificity, and a media query adds none, so anything placed here would lose
+   the source-order tie and silently do nothing. */
 
 /* Visitor bento tiles — gentle staggered fade-up on load. Base state is visible
    (opacity 1), so if the animation is suppressed (reduced-motion rule below sets
@@ -760,3 +1464,140 @@ input:focus, select:focus, textarea:focus {
   background: var(--accent);
   color: var(--bg);
 }
+
+/* ===========================================================================
+   Phone + tablet layer (< 1024px).  MUST STAY LAST IN THIS FILE.
+
+   Everything below is ADDITIVE and sits behind a max-width query, so desktop
+   never parses a line of it — that is what keeps the "≥1024px renders exactly
+   as before" guarantee honest. No token is touched and no existing rule is
+   edited, so the theme (super-admin recolours, night mode) is untouched.
+
+   Two reasons for the position and the odd breakpoint:
+   - Last in source order, because a media query contributes no specificity.
+     `.seg-btn` and `.cal-bar:hover` above are (0,1,0)/(0,2,0) just like the
+     overrides here, so an earlier placement would lose the tie and do nothing.
+   - 1023.98px rather than 1023px, so a fractional viewport width cannot land in
+     a dead zone between this and Tailwind's `lg:` (min-width: 1024px).
+   =========================================================================== */
+@media (max-width: 1023.98px) {
+  /* iOS Safari zooms the whole page whenever a focused field is under 16px.
+     The bare `input, select, textarea` rule near the top sets 0.9rem (14.4px),
+     so every tap on every form field in the app was yanking the viewport.
+     Highest-impact declaration in this block.
+
+     Every `:not()` here is load-bearing, not decoration. A bare `input` or
+     `select` selector is specificity (0,0,1) and loses to Tailwind's `text-xs`
+     (0,1,0) — the fleet search fields and the Settings → Users/Roles selects all
+     carry `text-xs` and stayed at 12px. `:not()` contributes its argument's
+     specificity, so `input…` reads (0,2,1) and `select/textarea…` (0,1,1), both
+     of which outrank a single utility class. The input exclusions are also
+     genuine: a checkbox and a radio must NOT be given a text size. */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select:not([hidden]),
+  textarea:not([hidden]) {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  /* Checkboxes render at ~13px, which is not a tap target. The surrounding
+     <label> is what most users actually hit, but the box itself should still be
+     findable by a thumb. */
+  input[type="checkbox"], input[type="radio"] {
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
+  }
+  /* For a checkbox the LABEL is what a thumb actually hits, and several were
+     only as tall as the 20px box. One `:has()` rule fixes every one in the app
+     rather than hunting the markup page by page. */
+  label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
+    min-height: 44px;
+  }
+
+  /* Touch targets: 44px floor. The pre-existing rule only reached 640px, which
+     left tablets — and every phone in landscape — on the desktop sizing. */
+  .btn { min-height: 44px; white-space: normal; }
+  .df-trigger, .tf-opt, .df-preset, .df-quick, .seg-btn { min-height: 44px; }
+  .df-trigger { font-size: 16px; }
+  /* The compact face exists so several controls can share one line; on a phone
+     they stack anyway, so it can afford a real tap target. */
+  .df-trigger.is-compact { font-size: 16px; padding: 9px 11px; }
+  .seg-btn { padding: 8px 14px; font-size: 0.82rem; }
+
+  /* Carousel controls. These are 32px because on desktop they are a secondary
+     affordance beside a 3-up row — but below `lg` the swipe deck IS the primary
+     view of Fleet, Reservations and Customers, so its prev/next and page pills
+     are among the most-tapped controls in the app. */
+  .swipe-nav-inline { width: 44px; height: 44px; }
+  .swipe-pg { min-width: 44px; height: 44px; font-size: 14px; }
+  /* The floating side arrows appear from `sm:` up, i.e. on tablets, which are
+     touch devices — 38px is a mouse-sized target. Nudge the offsets by the same
+     3px the radius grew so they keep their overhang over the card edge. */
+  .swipe-nav { width: 44px; height: 44px; }
+  .swipe-nav.left { left: -18px; }
+  .swipe-nav.right { right: -18px; }
+
+  /* Neumorphic timeline shell — 18px of padding each side is a lot of a 375px
+     screen to spend on nothing. */
+  .neo-panel { padding: 10px; }
+
+  /* Legibility. These are sized for a 3-up desktop row; at 1-up on a phone a
+     9px label and a 12.5px value are simply too small to read. */
+  .swipe-label { font-size: 11px; letter-spacing: 0.07em; }
+  .swipe-val, .swipe-val-mono { font-size: 14px; }
+
+  /* Role matrix stays a horizontal scroller (four roles will never fit a phone),
+     but the permission name sticks so you can tell which row you are toggling. */
+  .perm-head-role { width: auto; min-width: 68px; }
+  .perm-label {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
+
+  /* The invoice preview is a fixed A4-proportioned miniature — let it scroll
+     inside its own box rather than widening the page. */
+  .inv-prev { overflow-x: auto; }
+}
+
+/* Touch devices: neutralise hover-only affordances. On a phone `:hover` latches
+   after a tap and stays lit until you touch something else, so a "hovered"
+   button follows you around the page. Keyed on the input device rather than the
+   viewport, so a narrow window on a mouse-driven desktop keeps its hover states.
+   Each rule restores the element's own base value, so this is a true no-op
+   rather than a new look. */
+@media (hover: none) {
+  .btn:hover { background: var(--surface); transform: none; }
+  .btn-primary:hover { background: var(--accent); }
+  .swipe-card:hover { transform: none; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06); }
+  .df-trigger:hover:not(:disabled) { border-color: var(--border); }
+  .cal-bar:hover { transform: none; box-shadow: none; }
+
+  /* Give the tap its own feedback in exchange for the hover we removed. */
+  .btn:active { background: var(--bg); }
+  .df-day:active:not(:disabled),
+  .df-preset:active:not(:disabled),
+  .tf-opt:active { background: color-mix(in oklab, var(--accent) 14%, transparent); }
+}
+
+/* Date picker on a narrow screen. The popover is normally a rigid
+   362px = [105px preset rail | 230px month] row, which cannot fit a 375px
+   viewport once the 8px edge gutters are taken off. `is-narrow` is set by
+   DateField.tsx whenever it has to clamp the width; the preset rail then becomes
+   a horizontal strip above a full-width month instead of a fixed side column. */
+.df-pop.is-narrow .df-body { flex-direction: column; }
+.df-pop.is-narrow .df-cal { width: 100%; }
+.df-pop.is-narrow .df-rail {
+  width: 100%;
+  flex-direction: row;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-right: 0;
+  padding-bottom: 8px;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
+.df-pop.is-narrow .df-rail::-webkit-scrollbar { display: none; }
+.df-pop.is-narrow .df-preset { flex: none; }

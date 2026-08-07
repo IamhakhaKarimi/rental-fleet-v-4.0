@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { Sidebar } from "@/components/Sidebar";
+import { BottomNav } from "@/components/BottomNav";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -26,11 +27,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen">
+    // `100dvh` rather than `100vh`: on mobile Safari the URL bar collapsing
+    // mid-scroll changes vh and shifts the layout. Identical on desktop.
+    <div className="flex min-h-[100dvh]">
+      {/* Tablet + desktop. Below 768px this is display:none and BottomNav takes over. */}
       <Sidebar />
-      <main className="flex-1 min-w-0 px-5 py-6 md:px-8 md:py-7">
-        <div className="max-w-[1200px] mx-auto">{children}</div>
+      <main
+        className="flex-1 min-w-0 px-4 py-4 md:px-6 md:py-6 lg:px-8 lg:py-7
+                   pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-6 lg:pb-7"
+      >
+        <div className="min-w-0 max-w-[1200px] mx-auto">{children}</div>
       </main>
+      <BottomNav />
     </div>
   );
 }

@@ -64,7 +64,7 @@ Additions made in the most recent working session, on top of the baseline descri
 | Frontend framework | Next.js 14 (App Router) |
 | Backend framework | FastAPI (Python 3.9+) |
 | Primary database | SQLite (dev) / Turso libSQL or Neon Postgres (prod) |
-| Languages | Turkish, English, German, Italian, Spanish, Albanian |
+| Languages | Turkish, English, Albanian |
 | User roles | visitor · employer · admin · super_admin |
 | API routes | 95+ |
 | Database tables | 11 |
@@ -109,11 +109,8 @@ Rental-Fleet-V.4.0/
 │   ├── config/                     # Shared config (roles, i18n, terms)
 │   │   ├── roles.py                # 4 roles × 25 permissions, can(user, perm)
 │   │   ├── settings.py             # DB_PATH, SEED_CSV constants
-│   │   ├── terms.py                # rental_terms(lang) — 13 rules × 6 languages
+│   │   ├── terms.py                # rental_terms(lang) — 13 rules × 3 languages
 │   │   ├── i18n.py                 # TRANSLATIONS registry + t(key, lang)
-│   │   ├── lang_de.py              # German
-│   │   ├── lang_es.py              # Spanish
-│   │   ├── lang_it.py              # Italian
 │   │   └── lang_sq.py              # Albanian
 │   │
 │   ├── core/
@@ -308,9 +305,6 @@ Contexts are composed in `app/providers.tsx`:
 |---|---|---|
 | Turkish | `tr` | Default; fallback when lang is unknown |
 | English | `en` | |
-| German | `de` | |
-| Italian | `it` | |
-| Spanish | `es` | |
 | Albanian | `sq` | Staff-visible only |
 
 - Translation bundles are served from the FastAPI backend at `/api/i18n/{lang}.json`.
@@ -562,6 +556,33 @@ Slug values: `summary`, `monthly`, `yearly`, `by_vehicle`, `by_customer`, `recen
 | DELETE | `/api/users/{username}` | JWT | admin+ | Delete user (last-super guard) |
 | PUT | `/api/users/{username}/email` | JWT | admin+ | Update user email |
 | POST | `/api/users/{username}/reset-password` | JWT | admin+ | Admin password reset |
+
+#### Admin Panel — `/api/admin/*`
+
+Backs the Admin Panel (staff-by-role list + the role × permission checkbox
+matrix), which is rendered by `frontend/components/AdminPanel.tsx` inside
+**Settings → Roles**. There is no `/admin` route and no sidebar entry: the panel
+is configuration, so it sits with the other admin screens.
+
+Scope is decided server-side: a **super_admin** gets every role column and every
+unlocked permission; an **admin** gets only the `client_registration` group for
+the roles below them.
+
+| Method | Path | Auth | Permission | Description |
+|---|---|---|---|---|
+| GET | `/api/admin/permissions` | JWT | admin+ | Matrix, defaults, stored overrides, scope |
+| PUT | `/api/admin/permissions` | JWT | admin+ | Apply `{role: {perm: bool}}` (rejects out-of-scope cells wholesale) |
+| POST | `/api/admin/permissions/reset` | JWT | admin+ | Clear the overrides the actor may touch |
+
+Guardrails (in `services/permissions_service.py`, not the router):
+
+- `super_admin` always holds every permission — the matrix can never lock the owner out.
+- The `administration` group (`manage_users`, `assign_admin_roles`,
+  `edit_business_settings`, `backup_database`, `hard_delete_vehicle`) is **never**
+  overridable, for any role — that's the anti-escalation rule.
+- An admin may only grant permissions they hold themselves, to roles below them.
+- Only *deviations* from the shipped baseline are stored, so an untouched install
+  writes nothing and behaves exactly as before this layer existed.
 
 #### Settings → Business — `/api/settings/*`
 
@@ -853,6 +874,55 @@ Known keys: `business_name`, `business_phone`, `business_email`, `business_addre
 ---
 
 ## 6. Deployment
+
+### Running on the local network
+
+For an office where a handful of staff share one machine's app, `start.bat` boots
+`launcher/launcher.py` — a stdlib HTTP server on `127.0.0.1:8800` that serves the
+repo-root `index.html` and supervises both servers. It binds loopback only: it can start
+and stop processes, so it is never exposed to the network whatever mode the app runs in.
+
+| Mode | API | Web | Extra env |
+|---|---|---|---|
+| This PC only | `--host 127.0.0.1` | `next dev -H 127.0.0.1` | — |
+| Local WiFi network | `--host 0.0.0.0` | `next start -H 0.0.0.0` | `CORS_ALLOW_LAN=1`, `APP_BASE_URL=http://<ip>:3000` |
+
+LAN mode runs a **production build** because `next dev` is too slow and memory-hungry
+for several concurrent users. The build is done once and reused — see below for why it
+is not tied to an IP.
+
+**Four gates have to open together, or the app looks fine and then fails on login:**
+
+1. **Bind address** — uvicorn defaults to loopback; LAN mode passes `--host 0.0.0.0`.
+2. **Frontend API base** — `NEXT_PUBLIC_API_BASE` is inlined by Next at *build* time, so
+   a baked-in `127.0.0.1` would make a visiting laptop call its own loopback.
+   `lib/api.ts` therefore resolves at runtime: when the page is served from a
+   **non-loopback** host it reuses `window.location.hostname` with the API port. One
+   running server answers `localhost` and every LAN address at once, and a new DHCP
+   lease needs no rebuild. An explicitly configured *remote* base (the Vercel/Render
+   setup above) is still honoured verbatim, so production is unaffected.
+3. **CORS** — the allow-list is exact-match and `allow_credentials=True` rules out `*`.
+   `CORS_ALLOW_LAN=1` adds `settings.cors_origin_regex`, matching loopback on any port
+   plus the three RFC-1918 ranges. **Default off**, so cloud deployments keep the strict
+   list.
+4. **Windows Firewall** — `launcher/allow-firewall.bat` adds inbound TCP 3000/8001 rules
+   scoped to `profile=private`. It needs Administrator; the launcher's button raises the
+   UAC prompt rather than applying anything silently.
+
+Cookie flags need no change: `cookie_secure=False` / `samesite=lax` are already fine over
+plain http on a LAN, and auth rides on the Bearer header anyway. Do **not** copy
+`render.yaml`'s `COOKIE_SECURE=true` / `COOKIE_SAMESITE=none` into a LAN `.env` — the
+cookie would be dropped silently.
+
+One behaviour change worth knowing: `_is_local_dev()` in `api/routers/auth.py` returns
+`False` for LAN clients, so the password-reset `debug_link` is suppressed for them.
+
+**Concurrency and the database.** SQLite is the right choice at this scale — one writer,
+many concurrent readers, and an office's booking rate is nowhere near the limit. Keep
+`backend/fleet.db` on the host's **local disk**; SQLite over SMB or a OneDrive-synced
+folder can corrupt under concurrent writes. The host machine must stay awake, and
+everyone must be on the same router — there is no internet exposure and no port
+forwarding.
 
 ### Production Stack
 

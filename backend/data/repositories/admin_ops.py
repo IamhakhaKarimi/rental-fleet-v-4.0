@@ -29,18 +29,35 @@ BACKUP_TABLES = [
     "licenses",
 ]
 
+# `app_settings` rows that a backup must never carry. The annual-license cap is
+# one of them: backup/restore is an admin-level (level 2) capability, so if a
+# restore could write `licensed_until_year`, any admin could unlock years for
+# free by importing a hand-edited backup. These keys are skipped on export and
+# preserved across import — the running installation's own license always wins.
+# See services/licensing_service.PROTECTED_SETTING_KEYS.
+PROTECTED_SETTINGS = (
+    "licensed_until_year",
+    "licensed_until_year_sealed_at",
+)
+
 
 def export_all() -> dict:
     """Read every backed-up table into a JSON-serialisable dict. All columns are
     text / integer / NULL (money is INTEGER cents, images are base64 TEXT), so the
     result is JSON-safe as-is. Dialect-agnostic — runs over the shared engine, so it
-    works on local SQLite, Turso/libSQL and Postgres alike."""
+    works on local SQLite, Turso/libSQL and Postgres alike.
+
+    License state is omitted (see PROTECTED_SETTINGS): it is bound to this
+    installation's signing secret and is meaningless — or abusable — elsewhere."""
     eng = get_engine()
     tables: dict = {}
     with eng.connect() as conn:
         for tbl in BACKUP_TABLES:
             rows = conn.execute(text(f"SELECT * FROM {tbl}")).mappings().all()
-            tables[tbl] = [dict(r) for r in rows]
+            dicts = [dict(r) for r in rows]
+            if tbl == "app_settings":
+                dicts = [r for r in dicts if r.get("key") not in PROTECTED_SETTINGS]
+            tables[tbl] = dicts
     return {"format": "bcr-backup", "version": 1, "tables": tables}
 
 
@@ -50,12 +67,22 @@ def import_all(data: dict) -> dict:
     insert parent-first, so an interrupted restore rolls back cleanly and foreign
     keys never block. Column names are validated against the live table columns
     before use, so a tampered backup can't inject SQL through a column name.
+    License state (PROTECTED_SETTINGS) is held back from the wipe and restored
+    afterwards, so a restore can neither grant nor revoke licensed years.
     Returns {table: rows_inserted}."""
     payload = data.get("tables") or {}
     eng = get_engine()
     insp = inspect(eng)
     counts: dict = {}
     with eng.begin() as conn:
+        # Snapshot this installation's license rows before anything is touched.
+        keep = [
+            dict(r)
+            for r in conn.execute(
+                text("SELECT * FROM app_settings WHERE key IN (:k0, :k1)"),
+                {"k0": PROTECTED_SETTINGS[0], "k1": PROTECTED_SETTINGS[1]},
+            ).mappings().all()
+        ]
         # Wipe existing rows child-first (reverse dependency order) for FK safety.
         for tbl in reversed(BACKUP_TABLES):
             conn.execute(text(f"DELETE FROM {tbl}"))
@@ -66,6 +93,10 @@ def import_all(data: dict) -> dict:
             inserted = 0
             for row in rows:
                 if not isinstance(row, dict):
+                    continue
+                # A backup never legitimately carries license state; one that does
+                # is either stale or doctored. Drop it either way.
+                if tbl == "app_settings" and row.get("key") in PROTECTED_SETTINGS:
                     continue
                 cols = [c for c in row.keys() if c in valid_cols]
                 if not cols:
@@ -78,6 +109,16 @@ def import_all(data: dict) -> dict:
                 )
                 inserted += 1
             counts[tbl] = inserted
+        # Put the live license back exactly as it was.
+        settings_cols = {c["name"] for c in insp.get_columns("app_settings")}
+        for row in keep:
+            cols = [c for c in row.keys() if c in settings_cols]
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(f":{c}" for c in cols)
+            conn.execute(
+                text(f"INSERT INTO app_settings ({col_list}) VALUES ({placeholders})"),
+                {c: row[c] for c in cols},
+            )
     return counts
 
 

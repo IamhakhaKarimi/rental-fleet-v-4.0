@@ -45,14 +45,8 @@ RENTAL_TERMS = {
 }
 
 
-# Merge the auto-generated language modules (German/Italian/Spanish/Albanian).
-from config.lang_de import TERMS as _DE_TERMS   # noqa: E402
-from config.lang_it import TERMS as _IT_TERMS   # noqa: E402
-from config.lang_es import TERMS as _ES_TERMS   # noqa: E402
+# Merge the auto-generated Albanian language module.
 from config.lang_sq import TERMS as _SQ_TERMS   # noqa: E402
-RENTAL_TERMS["de"] = _DE_TERMS
-RENTAL_TERMS["it"] = _IT_TERMS
-RENTAL_TERMS["es"] = _ES_TERMS
 RENTAL_TERMS["sq"] = _SQ_TERMS
 
 

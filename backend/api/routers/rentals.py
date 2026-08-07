@@ -4,6 +4,11 @@ Reuses services/scheduling_service.py (availability math) and
 data/repositories/rentals.py (create/close/cancel) verbatim. Booking re-checks
 is_vehicle_free on save and snapshots the acting staff member (created_by*).
 Personal-info fields are stored UPPERCASE, mirroring the Streamlit booking panel.
+
+Every window this router builds is also checked against the annual license cap
+(``licensing_service.assert_allowed``) — both ends of it, since the return date is
+*derived* from the day count and would otherwise slip into an unlicensed year
+behind a perfectly licensed start date.
 """
 from __future__ import annotations
 
@@ -12,9 +17,9 @@ from datetime import date, datetime, time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.deps import require
+from api.deps import require, require_level
 from data.repositories import rentals as rrepo
-from services import audit_service, scheduling_service as sched
+from services import audit_service, licensing_service, scheduling_service as sched
 
 router = APIRouter(prefix="/api/rentals", tags=["rentals"])
 
@@ -24,11 +29,19 @@ def _cents(euros: float) -> int:
 
 
 def _window(start_date: str, start_time: str, days: int, return_time: str):
+    """Parse a booking window and refuse one that reaches past the licensed year.
+
+    The license check lives here rather than in each route so that every path
+    that can produce a rental window — availability probes, the free-car list and
+    the booking itself — is covered by construction.
+    """
     sd = date.fromisoformat(start_date)
     st = time.fromisoformat(start_time)
     rt = time.fromisoformat(return_time)
     start_dt = datetime.combine(sd, st)
     end_dt = sched.compute_return(sd, st, int(days), rt)
+    licensing_service.assert_allowed(start_dt, field="start_date")
+    licensing_service.assert_allowed(end_dt, field="return_date")
     return start_dt, end_dt
 
 
@@ -72,6 +85,12 @@ class VehicleSwapIn(BaseModel):
 class DatesIn(BaseModel):
     return_date: str = ""
     start_date: str = ""
+    start_time: str = ""
+    return_time: str = ""
+
+
+class DeleteIn(BaseModel):
+    confirm: bool = False
 
 
 # ── Reads ───────────────────────────────────────────────────────────────────
@@ -147,7 +166,12 @@ def update_rate(deal_id: str, body: RateIn,
 @router.put("/{deal_id}/dates")
 def update_dates(deal_id: str, body: DatesIn,
                  user: dict = Depends(require("create_reservation"))) -> dict:
-    total = rrepo.update_rental_dates(deal_id, body.return_date, body.start_date)
+    # Rescheduling is the other way a booking can reach into an unlicensed year.
+    # Blank fields mean "keep the stored value", which is already within the cap.
+    licensing_service.assert_allowed(body.start_date, field="start_date")
+    licensing_service.assert_allowed(body.return_date, field="return_date")
+    total = rrepo.update_rental_dates(deal_id, body.return_date, body.start_date,
+                                       body.start_time, body.return_time)
     if total == -1:
         raise HTTPException(404, detail="not_found")
     if total == -2:
@@ -185,4 +209,15 @@ def close(deal_id: str, body: CloseIn,
 def cancel(deal_id: str, user: dict = Depends(require("cancel_reservation"))) -> dict:
     rrepo.cancel_rental(deal_id)
     audit_service.record(user, "cancel_rental", "rental", deal_id)
+    return {"ok": True}
+
+
+@router.delete("/{deal_id}")
+def delete(deal_id: str, body: DeleteIn,
+          user: dict = Depends(require_level(2))) -> dict:  # admin + super-admin
+    if not body.confirm:
+        raise HTTPException(400, detail="fields_required")
+    if not rrepo.delete_rental(deal_id):
+        raise HTTPException(404, detail="not_found")
+    audit_service.record(user, "delete_rental", "rental", deal_id)
     return {"ok": True}

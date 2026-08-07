@@ -85,7 +85,7 @@ def list_charges_for_deal(deal_id: str) -> list[dict]:
 def list_rentals_for_customer(customer_id: int) -> list[dict]:
     sql = """SELECT r.deal_id, r.vehicle_id, r.start_dt, r.end_dt,
                     r.rental_days, r.daily_rate, r.total_amount, r.status,
-                    r.created_by_name, r.created_by_role,
+                    r.created_by, r.created_by_name, r.created_by_role,
                     v.make_model, v.license_plate
              FROM rentals r JOIN vehicles v ON v.vehicle_id=r.vehicle_id
              WHERE r.customer_id=:cid ORDER BY r.start_dt DESC"""
@@ -168,15 +168,16 @@ def update_rental_rate(deal_id: str, daily_rate_cents: int) -> int:
     return total
 
 
-def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "") -> int:
-    """Edit an Active rental's start and/or return DATE, keeping each end's existing
-    time-of-day. An empty string for either keeps the current value. Recomputes
+def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "",
+                         start_time: str = "", return_time: str = "") -> int:
+    """Edit an Active rental's start and/or return DATE (and optionally time-of-day).
+    An empty string for any field keeps the current value. Recomputes
     rental_days, the total (rate × days) and keeps the 'rental' income charge in
     sync. Rejects a return on/before the start, and a window that would clash with
     another active booking of the same car. Returns the new total in cents, or a
     negative code:
         -1 rental missing/closed, -2 invalid dates (return <= start), -3 clash."""
-    from datetime import date, datetime
+    from datetime import date, datetime, time as dtime
     with get_engine().begin() as conn:
         row = conn.execute(text(
             "SELECT vehicle_id, start_dt, end_dt, daily_rate FROM rentals "
@@ -188,10 +189,12 @@ def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "
         try:
             new_start_date = date.fromisoformat(start_date[:10]) if start_date else cur_start.date()
             new_end_date = date.fromisoformat(return_date[:10]) if return_date else cur_end.date()
+            new_start_time = dtime.fromisoformat(start_time) if start_time else cur_start.time()
+            new_end_time = dtime.fromisoformat(return_time) if return_time else cur_end.time()
         except ValueError:
             return -2
-        new_start = datetime.combine(new_start_date, cur_start.time())
-        new_end = datetime.combine(new_end_date, cur_end.time())
+        new_start = datetime.combine(new_start_date, new_start_time)
+        new_end = datetime.combine(new_end_date, new_end_time)
         days = (new_end_date - new_start_date).days
         if days < 1 or new_end <= new_start:
             return -2
@@ -262,6 +265,24 @@ def cancel_rental(deal_id: str):
             conn.execute(text(
                 "UPDATE vehicles SET status='Available',updated_at=datetime('now') WHERE vehicle_id=:v"
             ), {"v": vid})
+
+
+def delete_rental(deal_id: str) -> bool:
+    """Permanently remove one rental record — used to drop a duplicate/erroneous
+    entry from a customer's history. Cascades its charges (so it stops skewing
+    Finance totals) and frees the vehicle if this rental was the one holding it.
+    Returns False if the deal_id doesn't exist."""
+    with get_engine().begin() as conn:
+        vid = conn.execute(text(
+            "SELECT vehicle_id FROM rentals WHERE deal_id=:d AND status='Active'"
+        ), {"d": deal_id}).scalar()
+        conn.execute(text("DELETE FROM charges WHERE deal_id=:d"), {"d": deal_id})
+        deleted = conn.execute(text("DELETE FROM rentals WHERE deal_id=:d"), {"d": deal_id}).rowcount
+        if vid:
+            conn.execute(text(
+                "UPDATE vehicles SET status='Available',updated_at=datetime('now') WHERE vehicle_id=:v"
+            ), {"v": vid})
+    return bool(deleted)
 
 
 def reactivate_rental(deal_id: str) -> bool:

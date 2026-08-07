@@ -4,12 +4,17 @@ import { api, apiDel, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
+import { usePolling } from "@/lib/usePolling";
+import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
+import { RefreshIcon } from "@/components/RefreshIcon";
 import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
-import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
+import { SwipeDeck, SwipePanel } from "@/components/SwipeCard";
+import { VehicleCard, AvailabilityChip } from "@/components/VehicleCard";
+import { VehicleThumb } from "@/components/VehicleThumb";
 import type { Vehicle } from "@/lib/types";
 
 type V = Vehicle & { locked?: boolean };
@@ -60,7 +65,7 @@ function VehicleForm({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="col-span-2 text-xs text-muted">
           {t("col_model")}
           <input value={f.make_model} onChange={(e) => set("make_model", e.target.value)} />
@@ -99,15 +104,17 @@ function VehicleForm({
             <option value="Available">Available</option>
             <option value="Maintenance">Maintenance</option>
           </select>
-          {lockedStatus && (
-            <span className="text-warn flex items-center gap-1 mt-1">
-              <span className="msr text-[14px]">lock</span>
+        </label>
+        {lockedStatus && (
+          <div className="col-span-2 flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 p-2.5 text-xs text-warn">
+            <span className="msr text-[16px] shrink-0 mt-px">lock</span>
+            <span>
               {t("status_locked_rented") === "status_locked_rented"
-                ? "Locked while rented"
+                ? "Status is locked while this vehicle is rented."
                 : t("status_locked_rented")}
             </span>
-          )}
-        </label>
+          </div>
+        )}
         <label className="col-span-2 text-xs text-muted">
           {t("notes") === "notes" ? "Notes" : t("notes")}
           <textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} rows={2} />
@@ -185,7 +192,7 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
           {t("no_photos") === "no_photos" ? "No photos yet." : t("no_photos")}
         </p>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {photos.map((p) => (
             <div key={p.photo_id} className="relative group">
               <img
@@ -235,24 +242,14 @@ export default function FleetPage() {
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<V | null>(null);
-  const [view, setView] = useState<ViewMode>("cards");
+  const [removing, setRemoving] = useState<V | null>(null);
+  const [view, changeView] = useResponsiveView("fleet_view");
 
-  // Remember the last chosen view across visits.
-  useEffect(() => {
-    const v = localStorage.getItem("fleet_view");
-    if (v === "cards" || v === "table") setView(v);
-  }, []);
-  const changeView = (v: ViewMode) => {
-    setView(v);
-    localStorage.setItem("fleet_view", v);
-  };
-
-  const load = useCallback(() => {
-    apiGet<V[]>(`/api/vehicles?q=${encodeURIComponent(q)}`).then(setVehicles).catch(() => {});
+  const load = useCallback(async () => {
+    await apiGet<V[]>(`/api/vehicles?q=${encodeURIComponent(q)}`).then(setVehicles).catch(() => {});
   }, [q]);
-  useEffect(() => {
-    load();
-  }, [load]);
+
+  const { isLoading, refetch } = usePolling(load, { interval: 15000 });
 
   async function quickStatus(v: V, status: string) {
     try {
@@ -263,21 +260,26 @@ export default function FleetPage() {
       toast.error(t(e?.key || "error"));
     }
   }
-  async function archive(v: V) {
-    if (!confirm(`${t("delete_btn")}: ${v.vehicle_id} · ${v.make_model}?`)) return;
+  // skipConfirm: the new card "Archive / Delete" modal is itself a deliberate
+  // confirmation step, so it skips the native confirm() the table's direct
+  // buttons still rely on.
+  async function archive(v: V, skipConfirm = false) {
+    if (!skipConfirm && !confirm(`${t("delete_btn")}: ${v.vehicle_id} · ${v.make_model}?`)) return;
     try {
       await apiPost(`/api/vehicles/${v.vehicle_id}/archive`);
       toast.success(`${v.make_model} — ${tf("vehicle_archived", "vehicle archived")}`);
+      setRemoving(null);
       load();
     } catch (e: any) {
       toast.error(t(e?.key || "error"));
     }
   }
-  async function hardDelete(v: V) {
-    if (!confirm(`${t("delete_btn")} (permanent): ${v.vehicle_id}?`)) return;
+  async function hardDelete(v: V, skipConfirm = false) {
+    if (!skipConfirm && !confirm(`${t("delete_btn")} (permanent): ${v.vehicle_id}?`)) return;
     try {
       await apiDel(`/api/vehicles/${v.vehicle_id}`);
       toast.success(`${v.vehicle_id} — ${tf("vehicle_deleted", "vehicle deleted")}`);
+      setRemoving(null);
       load();
     } catch (e: any) {
       toast.error(t(e?.key || "error"));
@@ -353,14 +355,109 @@ export default function FleetPage() {
       </div>
     );
 
+  // Photo-forward card action buttons — same conditions/handlers as renderActions
+  // above, kept as its own function (rather than shared) so the table view above
+  // stays pixel-identical while the card grid below can use its own grouping
+  // (3-up neutral row + 2-up danger row) and button styling (solid Edit, soft
+  // Archive vs solid Delete) per the new card design.
+  const renderCardActions = (v: V) => {
+    if (!canEdit && !canFleet) return null;
+    const primary: JSX.Element[] = [];
+    if (canEdit) {
+      primary.push(
+        <button
+          key="edit"
+          className="btn btn-primary !py-1.5 !px-2 text-xs"
+          title={t("edit_vehicle") === "edit_vehicle" ? "Edit vehicle" : t("edit_vehicle")}
+          onClick={() => setEditing(v)}
+        >
+          <span className="msr text-[16px]">edit</span>
+          {t("edit") === "edit" ? "Edit" : t("edit")}
+        </button>
+      );
+    }
+    if (v.status !== "Maintenance") {
+      primary.push(
+        <button
+          key="maint"
+          className="btn !py-1.5 !px-2 text-xs"
+          title={t("set_maintenance") === "set_maintenance" ? "Set status to Maintenance" : t("set_maintenance")}
+          disabled={v.locked}
+          onClick={() => quickStatus(v, "Maintenance")}
+        >
+          <span className="msr text-[16px]">build</span>Maint.
+        </button>
+      );
+    }
+    if (canFleet && v.status !== "In Garage") {
+      primary.push(
+        <button
+          key="garage"
+          className="btn !py-1.5 !px-2 text-xs"
+          title={t("set_garage") === "set_garage" ? "Move to garage" : t("set_garage")}
+          disabled={v.locked}
+          onClick={() => quickStatus(v, "In Garage")}
+        >
+          <span className="msr text-[16px]">garage</span>Garage
+        </button>
+      );
+    }
+    if (v.status === "Maintenance" || v.status === "In Garage") {
+      primary.push(
+        <button
+          key="avail"
+          className="btn !py-1.5 !px-2 text-xs"
+          title={t("set_available") === "set_available" ? "Set status to Available" : t("set_available")}
+          disabled={v.locked}
+          onClick={() => quickStatus(v, "Available")}
+        >
+          <span className="msr text-[16px]">check_circle</span>Available
+        </button>
+      );
+    }
+
+    // Archive and Delete are folded into one button that opens a confirmation
+    // modal offering both — instead of two permanent-looking buttons sitting
+    // side by side on the card.
+    const canRemove = can(user, "soft_delete_vehicle") || can(user, "hard_delete_vehicle");
+
+    if (primary.length === 0 && !canRemove) return null;
+    return (
+      <div className="space-y-2">
+        {primary.length > 0 && <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{primary}</div>}
+        {canRemove && (
+          <button
+            className="btn btn-danger-soft w-full !py-1.5 !px-2 text-xs"
+            title={tf("remove_vehicle_hint", "Archive or delete this vehicle")}
+            onClick={() => setRemoving(v)}
+          >
+            <span className="msr text-[16px]">delete</span>
+            {tf("archive_or_delete", "Archive / Delete")}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // Always-reserved photo placeholder — most vehicles have no photo yet, so
+  // this stands in rather than collapsing the card's photo area to nothing.
+  const photoPlaceholder = (
+    <div className="h-[190px] w-full rounded-[14px] bg-bg border border-line flex items-center justify-center text-muted">
+      <span className="msr text-[40px]">directions_car</span>
+    </div>
+  );
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
+      {/* `flex-wrap` — this was the one page header without it, so at 375px the
+          title and the three controls were squeezed onto a single line. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="msr text-[22px]">directions_car</span>
           <h1 className="text-xl font-bold">{t("nav_fleet")}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <RefreshIcon onClick={refetch} isLoading={isLoading} />
           <ViewToggle
             value={view}
             onChange={changeView}
@@ -375,7 +472,7 @@ export default function FleetPage() {
           )}
         </div>
       </div>
-      <input placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm" />
+      <input placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} className="w-full max-w-sm" />
       <p className="text-xs text-muted">
         {vehicles.length} {t("col_count")}
       </p>
@@ -386,52 +483,41 @@ export default function FleetPage() {
           keyOf={(v) => v.vehicle_id}
           empty={<div className="text-sm text-muted">{t("no_cars")}</div>}
           render={(v) => (
-            <SwipeCard
+            <VehicleCard
               name={v.make_model}
-              reference={`${v.year || "—"} · ${v.vehicle_id}`}
-              chip={v.license_plate || "—"}
-              chipTitle={tf("col_plate", "Plate")}
-            >
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <SwipeField label={tf("col_status", "Status")}>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <StatusBadge status={v.status} />
-                    {v.locked && (
-                      <span className="badge badge-warn">
-                        <span className="msr text-[13px]">lock</span>
-                        {tf("status_locked_rented", "Rented")}
-                      </span>
-                    )}
-                  </div>
-                </SwipeField>
-                <SwipeField label={tf("col_color", "Color")}>
-                  <div className="swipe-val">
-                    {v.color || "—"}
-                    {v.mileage != null && (
-                      <span className="text-muted font-normal">
-                        {" · "}
-                        {v.mileage.toLocaleString()} km
-                      </span>
-                    )}
-                  </div>
-                </SwipeField>
-              </div>
-
-              <div className="mt-3">
+              photo={
+                <VehicleThumb
+                  vehicleId={v.vehicle_id}
+                  className="h-[190px] w-full object-cover rounded-[14px]"
+                  fallback={photoPlaceholder}
+                />
+              }
+              reference={
+                <>
+                  {v.year || "—"} · {v.license_plate || "—"}
+                  {v.color ? ` · ${v.color}` : ""}
+                  {v.mileage != null ? ` · ${v.mileage.toLocaleString()} km` : ""}
+                </>
+              }
+              status={<AvailabilityChip status={v.status} locked={v.locked} />}
+              price={
                 <SwipePanel>
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-display font-bold text-lg text-accent">
-                      {formatEur(v.base_daily_rate)}
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span className="msr text-[16px] text-muted">sell</span>
+                      <span className="text-xs text-muted">{tf("from", "from")}</span>
+                      <span className="font-display font-bold text-base text-accent">
+                        {formatEur(v.base_daily_rate)}
+                      </span>
                     </span>
                     <span className="text-[0.6rem] uppercase text-muted tracking-wide">
                       / {tf("day", "day")}
                     </span>
                   </div>
                 </SwipePanel>
-              </div>
-
-              {(canEdit || canFleet) && <div className="mt-3">{renderActions(v)}</div>}
-            </SwipeCard>
+              }
+              footer={(canEdit || canFleet) ? renderCardActions(v) : undefined}
+            />
           )}
         />
       ) : (
@@ -510,11 +596,13 @@ export default function FleetPage() {
       {editing && (
         <Modal title={`${editing.vehicle_id} · ${editing.make_model}`} onClose={() => setEditing(null)}>
           {editing.locked && (
-            <div className="text-xs text-warn flex items-center gap-1.5 mb-3">
-              <span className="msr text-[16px]">lock</span>
-              {t("status_locked_rented") === "status_locked_rented"
-                ? "Status is locked while this vehicle is rented."
-                : t("status_locked_rented")}
+            <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 p-2.5 text-xs text-warn mb-3">
+              <span className="msr text-[16px] shrink-0 mt-px">lock</span>
+              <span>
+                {t("status_locked_rented") === "status_locked_rented"
+                  ? "Status is locked while this vehicle is rented."
+                  : t("status_locked_rented")}
+              </span>
             </div>
           )}
           <VehicleForm
@@ -538,6 +626,48 @@ export default function FleetPage() {
             }}
           />
           {canEdit && <PhotoManager vehicleId={editing.vehicle_id} />}
+        </Modal>
+      )}
+
+      {removing && (
+        <Modal
+          title={`${removing.vehicle_id} · ${removing.make_model}`}
+          onClose={() => setRemoving(null)}
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-muted">
+              {tf(
+                "remove_vehicle_prompt",
+                "Archive keeps this vehicle's history and can be restored later. Delete removes it permanently."
+              )}
+            </p>
+            <div className="space-y-2">
+              {can(user, "soft_delete_vehicle") && (
+                <button
+                  className="btn btn-danger-soft w-full"
+                  onClick={() => archive(removing, true)}
+                >
+                  <span className="msr text-[18px]">archive</span>
+                  {t("archive_hint") === "archive_hint"
+                    ? "Archive (soft delete — can be restored)"
+                    : t("archive_hint")}
+                </button>
+              )}
+              {can(user, "hard_delete_vehicle") && (
+                <button
+                  className="btn btn-danger w-full"
+                  onClick={() => hardDelete(removing, true)}
+                >
+                  <span className="msr text-[18px]">delete</span>
+                  {t("delete_perm_hint") === "delete_perm_hint" ? "Delete permanently" : t("delete_perm_hint")}
+                </button>
+              )}
+              <button className="btn w-full" onClick={() => setRemoving(null)}>
+                <span className="msr text-[18px]">close</span>
+                {tf("cancel", "Cancel")}
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

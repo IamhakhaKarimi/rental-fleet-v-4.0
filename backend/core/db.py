@@ -226,6 +226,7 @@ def init_db():
     _migrate_users()
     _migrate_rentals()
     _migrate_add_columns()
+    _migrate_charges_types()
     _migrate_photos()
     if _is_fleet_empty():
         # Imported lazily to avoid a circular import at module load time.
@@ -291,8 +292,12 @@ def _migrate_add_columns():
     """
     plan = {
         "vehicles": {"photo": "TEXT NOT NULL DEFAULT ''"},
-        "users": {"lang": "TEXT NOT NULL DEFAULT 'tr'", "email": "TEXT NOT NULL DEFAULT ''"},
+        "users": {"lang": "TEXT NOT NULL DEFAULT 'tr'", "email": "TEXT NOT NULL DEFAULT ''",
+                  # Constant default (not datetime('now')) — SQLite forbids a
+                  # non-constant DEFAULT in ADD COLUMN. Empty = never changed.
+                  "password_changed_at": "TEXT NOT NULL DEFAULT ''"},
         "rentals": {"invoice_lang": "TEXT NOT NULL DEFAULT 'tr'"},
+        "charges": {"note": "TEXT NOT NULL DEFAULT ''"},
     }
     for table, cols in plan.items():
         existing = _table_columns(table)
@@ -303,6 +308,54 @@ def _migrate_add_columns():
             with get_engine().begin() as conn:
                 for col, ddl in missing.items():
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+
+
+def _migrate_charges_types():
+    """
+    Old databases have a narrower CHECK on charges.type (rental/overdue_penalty/
+    damage/deposit/refund only). Widen it to include the compensation types added
+    for the Damage Compensation ledger (mechanic_fee, traffic_fine, cleaning_fee,
+    fuel_shortage, lost_item, other). SQLite can't ALTER a CHECK constraint, so the
+    table is rebuilt in place; Postgres can ALTER it directly.
+    """
+    new_check = (
+        "'rental','overdue_penalty','damage','deposit','refund',"
+        "'mechanic_fee','traffic_fine','cleaning_fee','fuel_shortage','lost_item','other'"
+    )
+    if _dialect == "postgresql":
+        with get_engine().begin() as conn:
+            conn.execute(text("ALTER TABLE charges DROP CONSTRAINT IF EXISTS charges_type_check"))
+            conn.execute(text(f"ALTER TABLE charges ADD CONSTRAINT charges_type_check CHECK (type IN ({new_check}))"))
+        return
+    # sqlite / libsql (Turso)
+    with get_engine().begin() as conn:
+        ddl = conn.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='charges'"
+        )).scalar()
+        if not ddl or "mechanic_fee" in ddl:
+            return  # table doesn't exist yet, or already migrated
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(charges)")).all()]
+        note_expr = "note" if "note" in cols else "''"
+        conn.execute(text("ALTER TABLE charges RENAME TO charges_old"))
+        conn.execute(text(f"""
+            CREATE TABLE charges (
+                charge_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id     TEXT REFERENCES rentals(deal_id),
+                vehicle_id  TEXT REFERENCES vehicles(vehicle_id),
+                type        TEXT NOT NULL CHECK (type IN ({new_check})),
+                amount      INTEGER NOT NULL,
+                occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+                note        TEXT NOT NULL DEFAULT ''
+            )
+        """))
+        conn.execute(text(f"""
+            INSERT INTO charges (charge_id, deal_id, vehicle_id, type, amount, occurred_at, note)
+            SELECT charge_id, deal_id, vehicle_id, type, amount, occurred_at, {note_expr}
+            FROM charges_old
+        """))
+        conn.execute(text("DROP TABLE charges_old"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_charges_deal ON charges(deal_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_charges_vehicle ON charges(vehicle_id)"))
 
 
 def _migrate_photos():

@@ -1,0 +1,94 @@
+# Same-origin Nginx config for the single-VPS deployment described in
+# CLAUDE.md → "Deployment Targets (Production)": frontend served at "/",
+# backend proxied at "/api", uvicorn behind it as a single process, SQLite on
+# local disk. Same-origin is a security requirement here, not a convenience —
+# it removes CORS entirely and is what makes the HttpOnly cookie + Strict
+# SameSite (M9) actually work without a cross-site carve-out.
+#
+# Copy to /etc/nginx/sites-available/balkan-fleet.conf, fill in your domain +
+# cert paths, symlink into sites-enabled, `nginx -t`, then reload.
+#
+# TRUST_PROXY=true in the backend's .env MUST ship together with this file —
+# the X-Forwarded-For header set below is what makes that setting correct
+# instead of spoofable. Do not enable one without the other
+# (CLAUDE.md → "Sequencing constraints").
+
+# L0: outer rate/connection limits, ahead of the app's own L1-L3 (§8.3). Zone
+# sizes here are deliberately small (10m ≈ 160k tracked IPs) — this is a
+# coarse backstop, not the real limiter; the app's token buckets do the
+# actual per-account/per-cost-class work.
+limit_req_zone $binary_remote_addr zone=balkan_fleet_req:10m rate=20r/s;
+limit_conn_zone $binary_remote_addr zone=balkan_fleet_conn:10m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.example;
+    # ACME HTTP-01 challenge path (certbot) stays on plain HTTP; everything
+    # else redirects to HTTPS so no request is ever served unencrypted.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name your-domain.example;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # L0 body cap. Keep this ABOVE the backend's MAX_IMPORT_BYTES (the largest
+    # of its own caps — see .env.production.example) so Nginx never rejects a
+    # legitimate request the app would have accepted; the app's own caps
+    # (api/uploads.py, api/middleware.py#BodySizeLimitMiddleware) are what
+    # actually enforce the real per-endpoint limits.
+    client_max_body_size 55m;
+
+    limit_req  zone=balkan_fleet_req burst=40 nodelay;
+    limit_conn zone=balkan_fleet_conn 20;
+
+    # Backend — everything under /api, proxied to uvicorn on localhost.
+    location /api/ {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # The ONE header TRUST_PROXY=true in the backend trusts. Nginx sets
+        # it fresh here regardless of what the client sent, so a client
+        # cannot smuggle a spoofed value through — see api/middleware.py#client_ip.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # PDF exports and large backups can legitimately take a while under
+        # the L4 concurrency semaphore's own 5s acquire timeout plus render
+        # time; keep this comfortably above that.
+        proxy_read_timeout 60s;
+    }
+
+    # Internal diagnostics (/internal/stats, /internal/db-health) are already
+    # permission-gated server-side (require_level), but there is no reason to
+    # expose them to the public internet at all — block at the edge too.
+    location /internal/ {
+        deny all;
+        return 404;
+    }
+
+    # Frontend — Next.js, built with `npm run build` and served by `next
+    # start` (or `output: "standalone"`) on localhost:3000.
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}

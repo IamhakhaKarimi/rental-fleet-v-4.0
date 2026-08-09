@@ -18,6 +18,7 @@ import { RecordCard, RecordCardList } from "@/components/RecordCard";
 import { SwipeDeck, SwipePanel } from "@/components/SwipeCard";
 import { VehicleCard, AvailabilityChip } from "@/components/VehicleCard";
 import { VehicleThumb } from "@/components/VehicleThumb";
+import { useVehicleThumbs } from "@/lib/useVehicleThumbs";
 import { VisitorHome } from "@/components/VisitorHome";
 import type { FleetCounts, Vehicle } from "@/lib/types";
 
@@ -99,6 +100,7 @@ export default function DashboardPage() {
     [freeIds, vehicles]
   );
   const shownCars = dateCars ?? available;
+  const thumbs = useVehicleThumbs(shownCars.map((v) => v.vehicle_id));
   // Whole-day span of the committed window (0 when there's no real range) — shown next
   // to the dates in the heading and inside the picker so the length is explicit.
   const rangeDays =
@@ -121,6 +123,7 @@ export default function DashboardPage() {
       photo={
         <VehicleThumb
           vehicleId={v.vehicle_id}
+          src={thumbs[v.vehicle_id]}
           className="h-[150px] w-full object-cover rounded-[14px]"
           fallback={carPlaceholder}
         />

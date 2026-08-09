@@ -7,26 +7,40 @@ import { api } from "@/lib/api";
 const thumbCache = new Map<string, string | null>();
 
 /**
- * Lazy vehicle photo thumbnail — GET /api/vehicles/{id}/thumb (raw JPEG, 204 if
- * the vehicle has none). Fetched via the authenticated `api()` wrapper rather
- * than a plain `<img src>`: dev auth is a Bearer header (see lib/api.ts), which
- * an <img> tag can't send, so a bare URL would 401 across the dev cross-origin
- * split. Renders `fallback` until the photo resolves (or if there isn't one).
+ * Vehicle photo thumbnail.
+ *
+ * Preferred path: a list page calls `useVehicleThumbs()` once for every id it
+ * renders (one batched request) and passes the resolved value as `src` — see
+ * Fleet/Dashboard. That closes the N+1 this component used to cause on its
+ * own: one `GET .../thumb` request, one threadpool slot, one DB read, PER
+ * visible card (DOCUMENTATION.md §8.2 M6).
+ *
+ * `src` is optional so this stays usable standalone (e.g. a single detail
+ * view): omitted, it falls back to its own lazy per-vehicle fetch exactly as
+ * before, via the authenticated `api()` wrapper rather than a plain
+ * `<img src>` (dev auth is a Bearer header, which a bare `<img>` can't send).
  */
 export const VehicleThumb = memo(function VehicleThumb({
   vehicleId,
   className,
   fallback = null,
+  src: providedSrc,
 }: {
   vehicleId: string;
   className?: string;
   fallback?: ReactNode;
+  src?: string | null;
 }) {
+  const batched = providedSrc !== undefined;
   const [src, setSrc] = useState<string | null>(() =>
-    thumbCache.has(vehicleId) ? thumbCache.get(vehicleId)! : null
+    batched ? providedSrc! : (thumbCache.has(vehicleId) ? thumbCache.get(vehicleId)! : null)
   );
 
   useEffect(() => {
+    if (batched) {
+      setSrc(providedSrc!);
+      return;
+    }
     if (thumbCache.has(vehicleId)) {
       setSrc(thumbCache.get(vehicleId)!);
       return;
@@ -50,7 +64,7 @@ export const VehicleThumb = memo(function VehicleThumb({
     return () => {
       active = false;
     };
-  }, [vehicleId]);
+  }, [vehicleId, batched, providedSrc]);
 
   if (!src) return <>{fallback}</>;
   return <img src={src} alt="" className={className} />;

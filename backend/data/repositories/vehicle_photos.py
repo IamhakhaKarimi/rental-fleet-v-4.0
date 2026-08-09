@@ -6,7 +6,7 @@ own table so the vehicles listing stays light. Callers load the *primary* photo
 for thumbnails/cards and the full gallery only on demand.
 """
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from core.db import db_read, get_engine
 
 
@@ -35,6 +35,29 @@ def primary_photo(vehicle_id: str) -> str | None:
             {"v": vehicle_id},
         ).first()
     return row[0] if row else None
+
+
+def primary_photos_for(vehicle_ids: list[str]) -> dict[str, str | None]:
+    """Batched primary-photo lookup — one query for N vehicles instead of N,
+    closing the N+1 the Fleet/Dashboard pages used to cause (one thumb request
+    per visible card; see DOCUMENTATION.md §8.2 M6). Window function picks the
+    same "first by position, then photo_id" tie-break as primary_photo()."""
+    ids = [v for v in (vehicle_ids or []) if v]
+    if not ids:
+        return {}
+    stmt = text("""
+        WITH ranked AS (
+            SELECT vehicle_id, photo,
+                   ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY position, photo_id) AS rn
+            FROM vehicle_photos
+            WHERE vehicle_id IN :ids
+        )
+        SELECT vehicle_id, photo FROM ranked WHERE rn = 1
+    """).bindparams(bindparam("ids", expanding=True))
+    with db_read() as conn:
+        rows = conn.execute(stmt, {"ids": ids}).all()
+    found = {r[0]: r[1] for r in rows}
+    return {vid: found.get(vid) for vid in ids}
 
 
 def list_photos(vehicle_id: str) -> list[dict]:

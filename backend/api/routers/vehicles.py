@@ -80,6 +80,18 @@ def counts(user: dict = Depends(require("view_fleet"))) -> dict:
     return vrepo.fleet_counts()
 
 
+@router.get("/thumbs/batch")
+def thumbs_batch(ids: str = "",
+                 user: dict = Depends(require("view_fleet"))) -> dict:
+    """Batched primary-photo lookup: one request for a whole visible list of
+    cards instead of one `GET .../thumb` per vehicle (M6). `ids` is a
+    comma-separated vehicle_id list; capped defensively since it rides a GET
+    query string. Values are raw base64 JPEG (or null) — the frontend builds
+    its own `data:` URI, so this never needs to multiplex binary bodies."""
+    vehicle_ids = [v.strip() for v in ids.split(",") if v.strip()][:300]
+    return vphotos.primary_photos_for(vehicle_ids)
+
+
 @router.get("/{vehicle_id}")
 def get_one(vehicle_id: str, user: dict = Depends(require("service_vehicle"))) -> dict:
     v = vrepo.get_vehicle(vehicle_id)

@@ -29,6 +29,13 @@
 const CONFIGURED_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
 const DEFAULT_API_PORT = "8001";
 const LOOPBACK = /^(localhost|127(?:\.\d+){3}|\[?::1\]?)$/i;
+// The Phase 6 single-VPS deployment: Nginx proxies /api on the SAME origin as
+// the page (no separate port at all — unlike the launcher's LAN mode, which
+// really does put the API on a different port on the same host). A literal
+// "same-origin" opts out of the port-guessing logic below entirely: every
+// call site does `${apiBase()}${path}`, and path already starts with "/api",
+// so an empty base just resolves as a normal relative fetch.
+const SAME_ORIGIN = "same-origin";
 
 function configuredUrl(): URL | null {
   try {
@@ -39,6 +46,8 @@ function configuredUrl(): URL | null {
 }
 
 export function apiBase(): string {
+  if (CONFIGURED_BASE === SAME_ORIGIN) return "";
+
   const u = configuredUrl();
   // A real remote API was configured — always use it as given.
   if (u && !LOOPBACK.test(u.hostname)) return CONFIGURED_BASE;

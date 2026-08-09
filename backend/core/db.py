@@ -132,7 +132,29 @@ def get_engine() -> Engine:
                 cur.execute("PRAGMA mmap_size = 134217728")  # 128 MB memory-mapped I/O
                 cur.close()
 
+        if _dialect == "sqlite":
+            _instrument_sqlite_busy(_engine)
+
     return _engine
+
+
+def _instrument_sqlite_busy(engine: Engine) -> None:
+    """Count `database is locked` errors into api.monitoring.stats — the §8.8
+    migration trigger. `busy_timeout` (set above) makes SQLite retry internally
+    for up to 5s before raising, so an event here means a write queued behind
+    another for that entire window: real contention, not a blip. This is the
+    evidence the SQLite→Postgres decision is supposed to be made from, not a
+    guess — see the Database note in CLAUDE.md."""
+
+    @event.listens_for(engine, "handle_error")
+    def _count_lock_waits(ctx):
+        orig = getattr(ctx, "original_exception", None)
+        if orig is not None and "database is locked" in str(orig).lower():
+            try:
+                from api.monitoring import stats
+                stats.event("db.sqlite_busy")
+            except Exception:  # pragma: no cover - never let instrumentation break a real error
+                pass
 
 
 # ── Request-scoped read connections (Phase 5 / M3) ────────────────────────────

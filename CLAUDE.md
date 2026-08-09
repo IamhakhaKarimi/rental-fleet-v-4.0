@@ -163,20 +163,24 @@ Roles: `visitor(0)` < `employer(1)` < `admin(2)` < `super_admin(3)`
 
 ## Security & Runtime Hardening
 
-> **Status: Phases 0–4 shipped, Phase 5 partially (M3); 5 (remainder)–6 outstanding.**
+> **Status: Phases 0–4 and 6 shipped; Phase 5 partial (M3, M6 done; M5 deferred).**
 > Live now: the L1–L3 rate limiter (`api/middleware.py`), L4 concurrency semaphores
 > (`api/concurrency.py`), bounded uploads (`api/uploads.py`), request timing
 > (`api/monitoring.py`), security headers, the JWT boot guard, `jti`-based session
 > revocation (logout / logout-all), env-seeded bootstrap admin (no more
 > `admin`/`admin`), `(username, ip)`-keyed login lockout with exponential backoff,
-> the `HttpOnly`-cookie + CSRF Origin check, and request-scoped read connections
-> (`core/db.py#db_read()` + `RequestScopedDBMiddleware`, M3). Verified by
-> measurement — DOCUMENTATION.md §8.11.
+> the `HttpOnly`-cookie + CSRF Origin check, request-scoped read connections
+> (`core/db.py#db_read()` + `RequestScopedDBMiddleware`, M3), batched fleet
+> thumbnails (M6), a real `db.sqlite_busy` counter for the §8.8 migration trigger,
+> and the full Nginx/systemd single-VPS deployment config (Phase 6, see
+> "Deployment Targets" below). Verified by measurement — DOCUMENTATION.md §8.11.
 >
-> **Still outstanding, and worth doing before a public VPS deployment:** the
-> pytest suite scoped to Phase 4 auth behaviour, M5 pagination on list endpoints,
-> M6 fleet-thumbnail batching, and the Nginx same-origin deployment config incl.
-> `TRUST_PROXY` (Phase 6). Full audit and phased plan: **DOCUMENTATION.md → §8**.
+> **Still outstanding:** the pytest suite scoped to Phase 4 auth behaviour, and
+> M5 pagination on list endpoints — deferred deliberately (see §8.2 M5): the
+> repo functions that matter most (vehicles/customers/rentals) feed pages with
+> no paging UI today, so a backend-only stub would add surface area without
+> real benefit; needs a frontend paging design first. Full audit and phased
+> plan: **DOCUMENTATION.md → §8**.
 
 The target deployment is a **single VPS + Nginx, same-origin** (frontend at `/`,
 API proxied at `/api`), uvicorn single process, SQLite on local disk.
@@ -489,7 +493,11 @@ Two specificity gotchas that layer already solves:
 Same-origin is a security requirement, not a convenience: it removes CORS entirely and
 is what makes the `HttpOnly` cookie migration possible (DOCUMENTATION.md → §8.5).
 
-> ⚠️ **`DEPLOY.md` is stale.** It documents the earlier Vercel + Render + Turso split
-> and still instructs logging in with `admin`/`admin` (§8.2 C3). Do not follow it for a
-> public deployment until it is rewritten in Phase 6. The managed-database path it
-> describes would also make the app *slower* — see the Database note above.
+**`DEPLOY.md` was rewritten in Phase 6** for this single-VPS same-origin target — no
+more Vercel/Render/Turso, no more `admin`/`admin`. Config templates live at
+`.env.production.example` (backend), `frontend/.env.production.example` (frontend —
+`NEXT_PUBLIC_API_BASE=same-origin`), and `nginx/` (the Nginx config + two systemd
+units). Fixed in the same pass: `frontend/lib/api.ts#apiBase()` had no way to express
+"same origin, no port" — with the env var unset it fell back to guessing a port that
+isn't publicly exposed behind Nginx. The new `same-origin` literal makes every API call
+a plain relative fetch instead.

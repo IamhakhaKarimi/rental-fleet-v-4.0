@@ -1078,7 +1078,7 @@ Ranked by severity. File references are to the state of the code at the time of 
 |---|---|---|---|
 | C1 | `[x]` | `jwt_secret` defaults to `"dev-insecure-change-me-please"` and nothing checks it at boot. If `JWT_SECRET` is unset in production, **anyone can forge a `super_admin` token** and the entire RBAC layer is decorative. | `api/settings.py:24` |
 | C2 | `[x]` | Four `async def` endpoints perform blocking CPU work **directly on the event loop** — Pillow encode/resize, `json.loads` of an arbitrary-size body, and a full database import. One staff member uploading eight car photos freezes the whole API for everyone. Note this also stalls any middleware-based rate limiter, since that shares the same loop. | `routers/photos.py:49`, `routers/settings_business.py:166,197,580` |
-| C3 | `[x]` | ~~`ensure_default_admin()` seeds `admin`/`admin`~~ — replaced by `ensure_bootstrap_admin()`: env-seeded (`BOOTSTRAP_ADMIN_USER`/`PASSWORD`, required when `COOKIE_SECURE=true`), a `bootstrap_completed` marker in `app_settings` prevents any re-seed after the first boot, and dev falls back to a random logged-once password instead of a constant. `DEPLOY.md` step 5 is still stale and must not be followed until Phase 6. | `services/auth_service.py:148` |
+| C3 | `[x]` | ~~`ensure_default_admin()` seeds `admin`/`admin`~~ — replaced by `ensure_bootstrap_admin()`: env-seeded (`BOOTSTRAP_ADMIN_USER`/`PASSWORD`, required when `COOKIE_SECURE=true`), a `bootstrap_completed` marker in `app_settings` prevents any re-seed after the first boot, and dev falls back to a random logged-once password instead of a constant. `DEPLOY.md` was rewritten in Phase 6 for the single-VPS same-origin target and no longer references `admin`/`admin`. | `services/auth_service.py:148` |
 | C4 | `[x]` | **No rate limiting of any kind** on any of the 140 endpoints. The only throttle in the system is a per-account login lockout, which is itself a DoS vector (see H3). | `api/main.py` |
 
 #### High
@@ -1099,8 +1099,8 @@ Ranked by severity. File references are to the state of the code at the time of 
 | M2 | `[x]` | No `TrustedHostMiddleware` and no `X-Forwarded-For` handling. **Behind Nginx every request appears to originate from the proxy**, so any per-IP limit silently degrades into one shared global bucket — a self-inflicted outage waiting to happen. Must land *with* L1, never after. | `routers/auth.py:39` |
 | M3 | `[x]` | ~~108 connection-open sites~~ — the 57 read sites (`get_engine().connect()`) now go through `core/db.py#db_read()`, which reuses ONE connection per GET/HEAD request via `api/middleware.py#RequestScopedDBMiddleware`. Scoped to reads only, per the sequencing note: writes keep independent `get_engine().begin()` transactions untouched, so no transaction semantics changed. The connection opens lazily inside the request's own sync execution (not in the async middleware itself) and closes via a worker thread — verified the contextvar propagates correctly across FastAPI's `run_in_threadpool` boundary. | `core/db.py`, `api/middleware.py#RequestScopedDBMiddleware` |
 | M4 | `[ ]` | `list_customers` runs **7 correlated subqueries per row** and `list_customers_enriched` runs **4**, each re-scanning `rentals` for every customer. ⚠️ **Measured at 0.9 ms (8.11) — not a current problem.** Ranked too high on inspection alone; deferred. The shape is still O(customers x rentals), so revisit if the customer count grows ~10x. | `data/repositories/customers.py:98`, `:67` |
-| M5 | `[ ]` | No pagination on the vehicles / customers / rentals list endpoints (17 `list_*` repository functions). Response size and query cost grow without bound as the business does. | `data/repositories/` |
-| M6 | `[ ]` | N+1 thumbnails — `VehicleThumb` issues one HTTP request per vehicle on Fleet load, each consuming a threadpool slot and a database read. | `routers/vehicles.py:92` |
+| M5 | `[ ]` | No pagination on the vehicles / customers / rentals list endpoints (17 `list_*` repository functions). Response size and query cost grow without bound as the business does. **Deliberately deferred** (Phase 5): several `list_*` functions already cap themselves (`limit=100-200` — audit, charges, compensations, vehicle_costs); the ones that don't (vehicles/customers/rentals) feed pages with no paging UI today, so adding backend limit/offset params alone would sit unused — real value needs a frontend paging design first, done together. | `data/repositories/` |
+| M6 | `[x]` | ~~N+1 thumbnails~~ — new `GET /api/vehicles/thumbs/batch?ids=...` (`vehicle_photos.py#primary_photos_for`, one windowed query for N vehicles) + frontend `lib/useVehicleThumbs.ts` hook, wired into Fleet and Dashboard so a full card list issues ONE batched request instead of one per card. `VehicleThumb` keeps its old per-vehicle lazy fetch as a fallback for standalone use (`src` prop omitted). Verified: SQL tie-break matches the old single-vehicle query, and a full login→cookie-session→batch-endpoint round trip over real HTTP against an isolated DB copy. | `routers/vehicles.py`, `data/repositories/vehicle_photos.py`, `frontend/lib/useVehicleThumbs.ts` |
 | M7 | `[ ]` | `busy_timeout = 5000` lets a request pin a thread for a full 5 seconds under write contention, doing nothing. | `core/db.py:126` |
 | M8 | `[ ]` | `CORS_ALLOW_LAN=1` admits **any** RFC-1918 origin with `allow_credentials=True`. Acceptable for the launcher's LAN mode; must never be enabled on a public host. | `api/settings.py:77` |
 | M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote `NEXT_PUBLIC_API_BASE`. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. LAN mode verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
@@ -1284,6 +1284,14 @@ lock-wait events crossing a defined threshold in the monitoring added in Phase 2
 SQLite's single-writer lock is the real ceiling; concurrent *reads* are unaffected by
 it, so read slowness is evidence for 8.6, **not** evidence for migrating.
 
+**Shipped (Phase 6):** the trigger is now a real counter, not just a comment
+promising one. `core/db.py#_instrument_sqlite_busy` attaches a SQLAlchemy
+`handle_error` listener to the engine; a caught `database is locked` increments
+`db.sqlite_busy` in `api/monitoring.stats`, visible at `/internal/stats`.
+Verified against a real lock: two raw connections, one holding `BEGIN
+EXCLUSIVE`, the other forced through with `busy_timeout=0` so it fails instead
+of waiting out the 5s retry — the listener fired and the counter incremented.
+
 ### 8.9 Nginx Reference Configuration
 
 Nginx provides L0 and the same-origin arrangement that 8.5 depends on. It contributes
@@ -1298,7 +1306,18 @@ app must set `TRUST_PROXY=true`. Setting neither means every request looks like 
 from the proxy and the entire company shares one bucket; setting only the latter lets a
 client spoof its own IP and bypass L1 entirely.
 
-*(Concrete configuration to be written in Phase 6, once the measured limits exist.)*
+**Shipped (Phase 6):** `nginx/balkan-fleet.conf.example` — TLS termination, the
+`/api` proxy, `client_max_body_size`, `limit_req`/`limit_conn` (L0), and the
+`X-Forwarded-For`/`X-Real-IP` headers `TRUST_PROXY=true` depends on. Paired
+with `.env.production.example` (every backend knob, REQUIRED ones called out)
+and `nginx/balkan-fleet-{api,web}.service.example` (systemd units — see
+`DEPLOY.md`). Also closed in the same pass: `frontend/lib/api.ts#apiBase()`
+had no way to express "same origin, no port" — with `NEXT_PUBLIC_API_BASE`
+unset it fell back to `https://domain:8001`, bypassing Nginx and hitting a
+port that isn't publicly exposed. A new `NEXT_PUBLIC_API_BASE=same-origin`
+literal makes every API call a plain relative fetch instead (verified against
+all four modes: same-origin, LAN, remote split-host, local dev — see
+`frontend/.env.production.example`).
 
 ### 8.10 Phased Rollout & Verification
 

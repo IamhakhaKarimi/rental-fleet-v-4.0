@@ -15,6 +15,7 @@ import { ViewToggle, type ViewMode } from "@/components/ViewToggle";
 import { SwipeDeck, SwipePanel } from "@/components/SwipeCard";
 import { VehicleCard, AvailabilityChip } from "@/components/VehicleCard";
 import { VehicleThumb } from "@/components/VehicleThumb";
+import { useVehicleThumbs } from "@/lib/useVehicleThumbs";
 import type { Vehicle } from "@/lib/types";
 
 type V = Vehicle & { locked?: boolean };
@@ -244,6 +245,7 @@ export default function FleetPage() {
   const [editing, setEditing] = useState<V | null>(null);
   const [removing, setRemoving] = useState<V | null>(null);
   const [view, changeView] = useResponsiveView("fleet_view");
+  const thumbs = useVehicleThumbs(vehicles.map((v) => v.vehicle_id));
 
   const load = useCallback(async () => {
     await apiGet<V[]>(`/api/vehicles?q=${encodeURIComponent(q)}`).then(setVehicles).catch(() => {});
@@ -492,6 +494,7 @@ export default function FleetPage() {
               photo={
                 <VehicleThumb
                   vehicleId={v.vehicle_id}
+                  src={thumbs[v.vehicle_id]}
                   className="h-[190px] w-full object-cover rounded-[14px]"
                   fallback={photoPlaceholder}
                 />

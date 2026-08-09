@@ -1,0 +1,31 @@
+# systemd unit for the Next.js frontend (`next start`, production build).
+# Copy to /etc/systemd/system/balkan-fleet-web.service, fill in the paths/user:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now balkan-fleet-web
+#
+# NEXT_PUBLIC_API_BASE should be UNSET (or the site's own public origin) in
+# this same-origin deployment — see frontend/lib/api.ts#apiBase: unset means
+# "call the page's own host", which is what makes /api/... resolve correctly
+# through the Nginx proxy above without a rebuild per environment.
+
+[Unit]
+Description=Balkan Car Rentals - Fleet Console frontend (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=balkan-fleet
+WorkingDirectory=/opt/balkan-fleet/frontend
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/balkan-fleet/frontend
+
+[Install]
+WantedBy=multi-user.target

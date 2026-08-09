@@ -1,0 +1,34 @@
+# systemd unit for the FastAPI backend, single uvicorn process (per CLAUDE.md
+# → "Deployment Targets"). Copy to /etc/systemd/system/balkan-fleet-api.service,
+# fill in the paths/user, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now balkan-fleet-api
+#
+# Deliberately ONE worker: the rate limiter and L4 concurrency semaphores are
+# in-process counters (CLAUDE.md → "Rules that must hold in new code" #3) —
+# more workers silently multiply every limit. Scale by giving this one
+# process more threadpool headroom (THREADPOOL_MAX) before adding workers,
+# and if you ever do add workers, move the limiter state to something shared
+# first.
+
+[Unit]
+Description=Balkan Car Rentals - Fleet Console API (uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=balkan-fleet
+WorkingDirectory=/opt/balkan-fleet/backend
+EnvironmentFile=/opt/balkan-fleet/backend/.env
+ExecStart=/opt/balkan-fleet/backend/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8001
+Restart=on-failure
+RestartSec=2
+
+# Light sandboxing — this process only needs its own working directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/balkan-fleet/backend
+
+[Install]
+WantedBy=multi-user.target

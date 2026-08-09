@@ -24,8 +24,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+from api.concurrency import heavy_slot
 from api.deps import get_current_user, require
+from api.settings import settings as api_settings
+from api.uploads import read_capped
 from config.roles import can
 from data.repositories import admin_ops
 from data.repositories import app_settings as app_cfg
@@ -164,12 +168,16 @@ def set_contact(body: ContactIn,
 
 @router.post("/settings/logo")
 async def upload_logo(file: UploadFile = File(...),
-                      user: dict = Depends(require("manage_users"))) -> dict:
-    raw = await file.read()
+                      user: dict = Depends(require("manage_users")),
+                      _slot: dict = Depends(heavy_slot)) -> dict:
+    # encode_logo is Pillow (blocking, CPU-bound); calling it directly from an
+    # `async def` froze the event loop for every other user. See §8.2 C2 / §8.4.
+    raw = await read_capped(file, api_settings.max_upload_bytes)
     if not raw:
         raise HTTPException(400, detail="fields_required")
     from ui.photos import encode_logo
-    app_cfg.set_logo(encode_logo(_BytesUpload(raw)))
+    encoded = await run_in_threadpool(encode_logo, _BytesUpload(raw))
+    app_cfg.set_logo(encoded)
     audit_service.record(user, "set_logo", "settings", "company_logo")
     return {"has_logo": True}
 
@@ -195,12 +203,15 @@ def get_logo_png(user: dict = Depends(get_current_user)) -> Response:
 
 @router.post("/settings/stamp")
 async def upload_stamp(file: UploadFile = File(...),
-                       user: dict = Depends(require("manage_users"))) -> dict:
-    raw = await file.read()
+                       user: dict = Depends(require("manage_users")),
+                       _slot: dict = Depends(heavy_slot)) -> dict:
+    # Same blocking-Pillow-on-the-event-loop fix as upload_logo above.
+    raw = await read_capped(file, api_settings.max_upload_bytes)
     if not raw:
         raise HTTPException(400, detail="fields_required")
     from ui.photos import encode_stamp
-    app_cfg.set_stamp(encode_stamp(_BytesUpload(raw)))
+    encoded = await run_in_threadpool(encode_stamp, _BytesUpload(raw))
+    app_cfg.set_stamp(encoded)
     audit_service.record(user, "set_stamp", "settings", "company_stamp")
     return {"has_stamp": True}
 
@@ -454,7 +465,8 @@ def reset_fleet(body: ConfirmIn,
 # every business table; import replaces the current data with a previously exported
 # backup, in one transaction. Both audit.
 @router.get("/data/backup")
-def backup_database(user: dict = Depends(require("backup_database"))) -> Response:
+def backup_database(user: dict = Depends(require("backup_database")),
+                    _slot: dict = Depends(heavy_slot)) -> Response:
     payload = admin_ops.export_all()
     body = json.dumps(payload, ensure_ascii=False, indent=2)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -467,7 +479,8 @@ def backup_database(user: dict = Depends(require("backup_database"))) -> Respons
 
 
 @router.get("/data/backup.csv")
-def backup_database_csv(user: dict = Depends(require("backup_database"))) -> Response:
+def backup_database_csv(user: dict = Depends(require("backup_database")),
+                        _slot: dict = Depends(heavy_slot)) -> Response:
     """Same snapshot as ``/data/backup`` but as a ZIP of one CSV per table — handy for
     opening in Excel / Sheets. Secret and binary columns (password hashes, base64
     photo blobs) are dropped: this export is for *reading*, not restoring (import
@@ -494,7 +507,8 @@ def backup_database_csv(user: dict = Depends(require("backup_database"))) -> Res
 
 
 @router.get("/data/backup-single.csv")
-def backup_database_single_csv(user: dict = Depends(require("backup_database"))) -> Response:
+def backup_database_single_csv(user: dict = Depends(require("backup_database")),
+                               _slot: dict = Depends(heavy_slot)) -> Response:
     """The whole database as ONE CSV file: every table's rows concatenated, each
     section preceded by a ``# TABLE: <name>`` marker and its column header, with a
     blank line between tables. Secret/binary columns (password hashes, base64 photo
@@ -522,7 +536,8 @@ def backup_database_single_csv(user: dict = Depends(require("backup_database")))
 
 
 @router.get("/data/backup.sqlite")
-def backup_database_sqlite(user: dict = Depends(require("backup_database"))) -> Response:
+def backup_database_sqlite(user: dict = Depends(require("backup_database")),
+                           _slot: dict = Depends(heavy_slot)) -> Response:
     """The whole database as a portable single-file SQLite database. Built from the
     same snapshot as the JSON/CSV backups (so it works identically on a local SQLite
     dev DB and on a managed remote DB such as Turso/Postgres): every backed-up table
@@ -578,16 +593,31 @@ def backup_database_sqlite(user: dict = Depends(require("backup_database"))) -> 
 
 @router.post("/data/import")
 async def import_database(file: UploadFile = File(...),
-                          user: dict = Depends(require("backup_database"))) -> dict:
-    raw = await file.read()
+                          user: dict = Depends(require("backup_database")),
+                          _slot: dict = Depends(heavy_slot)) -> dict:
+    """Restore a JSON backup.
+
+    The most expensive endpoint in the app, and previously the most dangerous to
+    the event loop: an unbounded ``read()``, a ``json.loads`` of arbitrary size,
+    and a full multi-table write — all on the loop. Now bounded and offloaded.
+
+    ``max_import_bytes`` is the real memory ceiling of the process, since parsing
+    N bytes of JSON costs several times N. A streaming importer would let that cap
+    drop substantially — see DOCUMENTATION.md §8.4.
+    """
+    raw = await read_capped(file, api_settings.max_import_bytes, detail="request_too_large")
     if not raw:
         raise HTTPException(400, detail="fields_required")
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except Exception:
-        raise HTTPException(400, detail="invalid_backup")
-    if not isinstance(data, dict) or not isinstance(data.get("tables"), dict):
-        raise HTTPException(400, detail="invalid_backup")
-    counts = admin_ops.import_all(data)
+
+    def _parse_and_import(payload: bytes) -> dict:
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception:
+            raise HTTPException(400, detail="invalid_backup")
+        if not isinstance(data, dict) or not isinstance(data.get("tables"), dict):
+            raise HTTPException(400, detail="invalid_backup")
+        return admin_ops.import_all(data)
+
+    counts = await run_in_threadpool(_parse_and_import, raw)
     audit_service.record(user, "import_database", "data", "restore")
     return {"ok": True, "counts": counts}

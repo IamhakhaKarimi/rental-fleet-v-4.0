@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from api.concurrency import heavy_slot
 from api.deps import require
 from config.settings import LANGUAGES
 from data.repositories import app_settings as app_cfg
@@ -47,7 +48,8 @@ def invoice_html(deal_id: str, lang: str = "",
 
 @router.get("/{deal_id}/invoice.pdf")
 def invoice_pdf(deal_id: str, lang: str = "",
-                user: dict = Depends(require("view_management"))) -> Response:
+                user: dict = Depends(require("view_management")),
+                _slot: dict = Depends(heavy_slot)) -> Response:
     deal, charges, biz, lang, logo, stamp = _ctx(deal_id, lang)
     pdf = build_invoice_pdf(deal, charges, biz, lang, logo, stamp)
     return Response(
@@ -64,7 +66,8 @@ class BatchInvoicesIn(BaseModel):
 
 @router.post("/invoices-batch.html", response_class=HTMLResponse)
 def invoices_batch_html(body: BatchInvoicesIn,
-                        user: dict = Depends(require("view_management"))) -> HTMLResponse:
+                        user: dict = Depends(require("view_management")),
+                        _slot: dict = Depends(heavy_slot)) -> HTMLResponse:
     """One printable HTML doc with a single OFFICE copy per selected rental — the
     Customers-page "print active invoices" run. Skips any missing deal id and 404s
     only if nothing valid was selected."""

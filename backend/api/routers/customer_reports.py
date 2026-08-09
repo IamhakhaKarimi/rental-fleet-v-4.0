@@ -21,6 +21,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
+from api.concurrency import heavy_slot
 from api.deps import require
 from config.i18n import t_lang
 from config.settings import LANGUAGES
@@ -188,21 +189,24 @@ def _customers_csv(body: CustomersReportIn) -> Response:
 
 
 @router.get("/customers.csv")
-def customers_report_csv(user: dict = Depends(require("view_management"))) -> Response:
+def customers_report_csv(user: dict = Depends(require("view_management")),
+                         _slot: dict = Depends(heavy_slot)) -> Response:
     """Every rental, every column — the no-options download."""
     return _customers_csv(CustomersReportIn())
 
 
 @router.post("/customers.csv")
 def customers_report_csv_selected(body: CustomersReportIn,
-                                  user: dict = Depends(require("view_management"))) -> Response:
+                                  user: dict = Depends(require("view_management")),
+                                  _slot: dict = Depends(heavy_slot)) -> Response:
     """Same CSV narrowed to the months / columns picked in the report modal."""
     return _customers_csv(body)
 
 
 @router.post("/customers-table.pdf")
 def customers_table_pdf(body: CustomersReportIn,
-                        user: dict = Depends(require("view_management"))) -> Response:
+                        user: dict = Depends(require("view_management")),
+                        _slot: dict = Depends(heavy_slot)) -> Response:
     """The client list as a paginated A4 table: chosen columns, rentals limited to
     the chosen start months, sorted A–Z / by reservation date / by Make-Model, with
     25–30 rows per page and a numbered footer."""
@@ -244,7 +248,8 @@ def customers_table_pdf(body: CustomersReportIn,
 
 @router.get("/customers-timeline.pdf")
 def customers_timeline_pdf(lang: str = "",
-                           user: dict = Depends(require("view_management"))) -> Response:
+                           user: dict = Depends(require("view_management")),
+                           _slot: dict = Depends(heavy_slot)) -> Response:
     lang = lang if lang in LANGUAGES else "tr"
     rentals = [dict(r) for r in rrepo.list_all_rentals_with_vehicle()]
 

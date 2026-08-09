@@ -12,17 +12,73 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from api.deps import require_level
+from api.middleware import (
+    BodySizeLimitMiddleware,
+    CSRFOriginMiddleware,
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    RequestScopedDBMiddleware,
+    SecurityHeadersMiddleware,
+)
+from api.monitoring import get_logger, stats
 from api.settings import settings
 from services.licensing_service import LicenseLimitError
+
+_boot_log = get_logger("boot")
+
+
+_DEFAULT_JWT_SECRET = "dev-insecure-change-me-please"
+
+
+def _verify_production_config() -> None:
+    """Refuse to start a production instance with a forgeable session secret.
+
+    ``cookie_secure`` is the production signal (it is only ever true behind HTTPS).
+    With the shipped default secret, anyone can mint a valid ``super_admin`` token
+    and the entire RBAC layer becomes decorative — so this is a hard failure at
+    boot, not a warning in a log nobody reads. See DOCUMENTATION.md §8.2 C1.
+    """
+    if not settings.cookie_secure:
+        return  # dev / LAN launcher — the default secret is fine here
+    secret = (settings.jwt_secret or "").strip()
+    if secret == _DEFAULT_JWT_SECRET or len(secret) < 32:
+        raise RuntimeError(
+            "JWT_SECRET is unset, default, or shorter than 32 characters while "
+            "COOKIE_SECURE=true. Refusing to start: with a guessable secret any "
+            "client can forge a super_admin session token. Set JWT_SECRET to a "
+            "long random value (e.g. `python -c \"import secrets;"
+            "print(secrets.token_urlsafe(48))\"`)."
+        )
+    if settings.cors_allow_lan:
+        raise RuntimeError(
+            "CORS_ALLOW_LAN=1 with COOKIE_SECURE=true. LAN mode admits any "
+            "RFC-1918 origin with credentials and must never be enabled on a "
+            "public host. See DOCUMENTATION.md §8.2 M8."
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _verify_production_config()
+
+    # 136 of 140 endpoints are sync `def` and run in AnyIO's worker pool. The
+    # framework default is 40 threads — a general-purpose guess, not a decision
+    # about this workload. Set it deliberately. (§8.4)
+    try:
+        import anyio.to_thread
+
+        anyio.to_thread.current_default_thread_limiter().total_tokens = (
+            settings.threadpool_max
+        )
+    except Exception:  # pragma: no cover - never let tuning break startup
+        pass
+
     # Bridge our setting into the env var core/db.py reads. Empty => local SQLite.
     if settings.database_url:
         os.environ["DATABASE_URL"] = settings.database_url
@@ -51,6 +107,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Middleware ────────────────────────────────────────────────────────────────
+# `add_middleware` PREPENDS, so the last one added is the outermost. The intended
+# order, outermost first, is:
+#
+#   RequestContext  — times everything, including rejections, and stamps X-Request-ID
+#   CORS            — must wrap the limiter, or a 429 arrives without CORS headers
+#                     and the browser reports a CORS failure instead of "slow down"
+#   SecurityHeaders — applies to every response, including errors
+#   BodySizeLimit   — reject oversized bodies before any handler sees them
+#   CSRFOrigin      — reject forged cross-site writes before RateLimit spends a
+#                     token on a request that was always going to be rejected
+#   RateLimit       — L1-L3 (DOCUMENTATION.md §8.3)
+#   RequestScopedDB — innermost: binds the request's read-connection holder
+#                     immediately around the actual handler, nothing outside it
+#                     ever calls db_read() (DOCUMENTATION.md §8.8 M3)
+#
+# so they are added here in reverse.
+app.add_middleware(RequestScopedDBMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(CSRFOriginMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -60,6 +138,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestContextMiddleware)
 
 
 @app.exception_handler(LicenseLimitError)
@@ -89,8 +168,15 @@ def health() -> dict:
 
 
 @app.get("/internal/db-health")
-def db_health() -> JSONResponse:
-    """Confirm the bound DB answers a trivial query; report the dialect."""
+def db_health(user: dict = Depends(require_level(2))) -> JSONResponse:
+    """Confirm the bound DB answers a trivial query; report the dialect.
+
+    Admin-gated, and the exception text is deliberately NOT returned: a connection
+    failure message routinely embeds the database host, user and (for URL-style
+    DSNs) the password. It goes to the server log, where it is useful, instead of
+    to an unauthenticated caller, where it is a credential leak.
+    See DOCUMENTATION.md §8.2 H4.
+    """
     import core.db as dbmod
     from core.db import get_engine
 
@@ -98,13 +184,34 @@ def db_health() -> JSONResponse:
         with get_engine().connect() as c:
             ok = c.execute(text("SELECT 1")).scalar_one() == 1
     except Exception as exc:  # pragma: no cover - diagnostic
+        _boot_log.error("db-health failed: %s", exc)
         return JSONResponse(
             status_code=503,
-            content={"ok": False, "dialect": dbmod._dialect, "error": str(exc)},
+            content={"ok": False, "dialect": dbmod._dialect, "error": "unavailable"},
         )
     return JSONResponse(
         {"ok": ok, "dialect": dbmod._dialect, "is_remote": dbmod._is_remote}
     )
+
+
+@app.get("/internal/stats")
+def request_stats(user: dict = Depends(require_level(2))) -> JSONResponse:
+    """Per-route latency percentiles and rejection counters.
+
+    This is the **Phase 0 measurement instrument** (DOCUMENTATION.md §8.10): the
+    provisional limits in `api/settings.py` are meant to be replaced with values
+    derived from what this reports under real load. Routes are returned slowest
+    p95 first. `events` carries limiter and concurrency rejections, which is how
+    you tell "the limits are working" from "the limits are too tight".
+    """
+    return JSONResponse(stats.snapshot())
+
+
+@app.post("/internal/stats/reset")
+def reset_request_stats(user: dict = Depends(require_level(3))) -> JSONResponse:
+    """Clear the samples, so a benchmark run starts from a clean baseline."""
+    stats.reset()
+    return JSONResponse({"ok": True})
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────

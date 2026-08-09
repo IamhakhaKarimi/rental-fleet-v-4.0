@@ -1,10 +1,10 @@
 """Vehicles repository — full CRUD including next-ID generation."""
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 def _next_id() -> str:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         # LIKE 'C%' is cross-dialect (SQLite + Postgres); the tail.isdigit() filter
         # below keeps only C<number> ids, so we don't need SQLite-only GLOB ranges.
         rows = conn.execute(text(
@@ -25,12 +25,12 @@ def list_vehicles(include_deleted: bool = False) -> list[dict]:
     sql = f"""SELECT vehicle_id, make_model, year, license_plate, color,
                      mileage, status, base_daily_rate, notes
               FROM vehicles {where} ORDER BY vehicle_id"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
 def get_vehicle(vehicle_id: str) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT * FROM vehicles WHERE vehicle_id=:v"), {"v": vehicle_id}
         ).mappings().first()
@@ -43,7 +43,7 @@ def fleet_counts() -> dict:
                     SUM(CASE WHEN status='Rented'    THEN 1 ELSE 0 END) AS rented,
                     SUM(CASE WHEN status IN ('In Garage','Maintenance') THEN 1 ELSE 0 END) AS garage
              FROM vehicles WHERE status != 'DELETED'"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(text(sql)).mappings().first()
     return {k: (row[k] or 0) for k in ("total", "available", "rented", "garage")}
 

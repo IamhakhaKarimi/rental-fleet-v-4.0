@@ -7,11 +7,14 @@ changes take effect immediately (no stale-token privilege).
 """
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
-from api.deps import get_current_user
-from api.security import clear_auth_cookie, create_access_token, set_auth_cookie
+from api.deps import _extract_token, get_current_user
+from api.middleware import client_ip
+from api.security import clear_auth_cookie, create_access_token, decode_token, set_auth_cookie
 from api.settings import settings
 from config.roles import PERMISSION_MIN_LEVEL, ROLE_LABEL_KEY, can
 from data.repositories import users as users_repo
@@ -37,7 +40,11 @@ class ResetIn(BaseModel):
 
 
 def _client_ip(request: Request) -> str:
-    return (request.client.host if request.client else "") or ""
+    # Delegates to the proxy-aware helper middleware.py already uses for the L1
+    # rate limiter, so lockout and rate limiting agree on who the caller is —
+    # a request.client.host read here would report Nginx's address in
+    # production and collapse every staff member into one IP (§8.2 M2).
+    return client_ip(request.scope)
 
 
 def _is_local_dev(request: Request) -> bool:
@@ -89,12 +96,17 @@ def _fresh_public_user(username: str) -> dict | None:
 def login(body: LoginIn, response: Response, request: Request) -> dict:
     """Password login, throttled per account.
 
-    After settings.max_login_failures consecutive failures the account is locked
-    for settings.lockout_minutes; the lock is checked BEFORE the password is
-    verified so a locked account costs an attacker a request without giving them
-    a bcrypt comparison to time."""
+    The lock is keyed on (username, ip) with exponential backoff, so an attacker
+    hammering a known username can only ever lock out their own IP's attempts
+    against that name — never the genuine user logging in from their usual
+    network. It is checked BEFORE the password is verified so a locked pair
+    costs an attacker a request without giving them a bcrypt comparison to time.
+    A separate global-per-username counter adds a small delay (never a lock)
+    once failures pile up across many IPs, as friction against a distributed
+    guessing spread."""
     username = (body.username or "").strip()
-    locked = auth_service.lockout_remaining(username)
+    ip = _client_ip(request)
+    locked = auth_service.lockout_remaining(username, ip)
     if locked > 0:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -102,11 +114,15 @@ def login(body: LoginIn, response: Response, request: Request) -> dict:
             headers={"Retry-After": str(locked)},
         )
 
+    delay = auth_service.global_login_delay_seconds(username)
+    if delay:
+        time.sleep(delay)
+
     user = auth_service.authenticate(username, body.password)
     if not user:
-        lock_secs = auth_service.register_login_failure(username)
+        lock_secs = auth_service.register_login_failure(username, ip)
         audit_service.record({"username": username or "?"}, "login_failed", "auth",
-                             username, f"ip={_client_ip(request)}")
+                             username, f"ip={ip}")
         if lock_secs:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
@@ -115,15 +131,27 @@ def login(body: LoginIn, response: Response, request: Request) -> dict:
             )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="login_failed")
 
-    auth_service.clear_login_failures(username)
-    token = create_access_token(user, remember=body.remember)
+    auth_service.clear_login_failures(username, ip)
+    token, jti, expires_at = create_access_token(user, remember=body.remember)
+    users_repo.insert_session(jti, user["username"], expires_at.replace(tzinfo=None))
     set_auth_cookie(response, token, remember=body.remember)
     return {"user": _me_payload(user), "token": token}
 
 
 @router.post("/auth/logout")
-def logout(response: Response, user: dict = Depends(get_current_user)) -> dict:
-    # Stateless JWT — clearing the cookie ends the session client-side.
+def logout(request: Request, response: Response, user: dict = Depends(get_current_user)) -> dict:
+    payload = decode_token(_extract_token(request))
+    jti = (payload or {}).get("jti")
+    if jti:
+        users_repo.delete_session(jti)
+    clear_auth_cookie(response)
+    return {"ok": True}
+
+
+@router.post("/auth/logout-all")
+def logout_all(response: Response, user: dict = Depends(get_current_user)) -> dict:
+    """Revoke every session for this account, including the one making the call."""
+    users_repo.delete_sessions_for_user(user["username"])
     clear_auth_cookie(response)
     return {"ok": True}
 

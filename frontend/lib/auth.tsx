@@ -30,11 +30,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    if (!loadAuthToken()) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+    // Always ask — the HttpOnly cookie (not a readable token) is what proves
+    // the session now, so there is nothing client-side to check first. A 401
+    // here just means "not logged in", which is the expected steady state.
     try {
       setUser(await apiGet<User>("/api/me"));
     } catch {
@@ -56,9 +54,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         remember,
       });
-      // Same choice the backend applied to the token's lifetime decides whether
-      // it is persisted to disk or only for this browser session.
-      setAuthToken(res.token, remember);
+      // The cookie is already set by the backend response; this only matters
+      // for the remote-API-base case (see setAuthToken in lib/api.ts).
+      setAuthToken(res.token);
       setUser(res.user);
     },
     []

@@ -7,11 +7,11 @@ for thumbnails/cards and the full gallery only on demand.
 """
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 def photo_count(vehicle_id: str) -> int:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(
             text("SELECT COUNT(*) FROM vehicle_photos WHERE vehicle_id = :v"),
             {"v": vehicle_id},
@@ -20,7 +20,7 @@ def photo_count(vehicle_id: str) -> int:
 
 def photos_version(vehicle_id: str) -> int:
     """Monotonic-ish cache key: max photo_id (changes whenever photos change)."""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(
             text("SELECT COALESCE(MAX(photo_id), 0) FROM vehicle_photos WHERE vehicle_id = :v"),
             {"v": vehicle_id},
@@ -28,7 +28,7 @@ def photos_version(vehicle_id: str) -> int:
 
 
 def primary_photo(vehicle_id: str) -> str | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("""SELECT photo FROM vehicle_photos WHERE vehicle_id = :v
                     ORDER BY position, photo_id LIMIT 1"""),
@@ -38,7 +38,7 @@ def primary_photo(vehicle_id: str) -> str | None:
 
 
 def list_photos(vehicle_id: str) -> list[dict]:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(
             text("""SELECT photo_id, photo, position FROM vehicle_photos
                     WHERE vehicle_id = :v ORDER BY position, photo_id"""),

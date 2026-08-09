@@ -3,14 +3,14 @@ Users and sessions repository — all SQL touching accounts and login sessions.
 Passwords arrive here already hashed (by auth_service); this layer never hashes.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 # ---- Users ------------------------------------------------------------------
 def get_user(username: str) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("""SELECT user_id, username, password_hash, full_name, role,
                            is_active, lang, email, password_changed_at
@@ -27,7 +27,7 @@ def get_user_by_email(email: str) -> dict | None:
     email = (email or "").strip()
     if not email:
         return None
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         rows = conn.execute(
             text("""SELECT user_id, username, password_hash, full_name, role,
                            is_active, lang, email, password_changed_at
@@ -38,7 +38,7 @@ def get_user_by_email(email: str) -> dict | None:
 
 
 def list_users() -> list[dict]:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         rows = conn.execute(
             text("""SELECT username, full_name, role, is_active, email, created_at
                     FROM users ORDER BY role, username""")
@@ -47,7 +47,7 @@ def list_users() -> list[dict]:
 
 
 def count_users() -> int:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
 
 
@@ -137,8 +137,26 @@ def insert_session(token_hash: str, username: str, expires_at: datetime):
         )
 
 
+def get_user_with_session(username: str, jti: str) -> dict | None:
+    """One joined query: the live user row, but only if ``jti`` is still a
+    registered, unexpired session for that user. Used by the per-request auth
+    dependency so revocation checking costs no extra round-trip beyond the
+    existing user re-read."""
+    with db_read() as conn:
+        row = conn.execute(
+            text("""SELECT u.user_id, u.username, u.full_name, u.role, u.is_active,
+                           u.lang, u.email, u.password_changed_at
+                    FROM users u
+                    JOIN sessions s ON s.username = u.username
+                    WHERE u.username = :u AND s.token_hash = :j
+                          AND s.expires_at > :now"""),
+            {"u": username, "j": jti, "now": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
 def get_session(token_hash: str) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT username, expires_at FROM sessions WHERE token_hash = :t"),
             {"t": token_hash},
@@ -181,7 +199,7 @@ def insert_password_reset(token_hash: str, username: str, expires_at: datetime,
 
 
 def get_password_reset(token_hash: str) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("""SELECT token_hash, username, expires_at, used_at
                     FROM password_resets WHERE token_hash = :t"""),
@@ -207,7 +225,7 @@ def consume_password_reset(token_hash: str) -> bool:
 def count_recent_password_resets(username: str, since: datetime) -> int:
     """How many tickets this account has been issued since `since` — the rate limit
     that stops the reset endpoint being used to spam someone's inbox."""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(
             text("""SELECT COUNT(*) FROM password_resets
                     WHERE username = :u AND created_at >= :s"""),
@@ -223,7 +241,7 @@ def purge_expired_password_resets():
 
 # ---- Failed-login throttling ------------------------------------------------
 def get_login_attempt(username: str) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT username, fails, locked_until FROM login_attempts WHERE username = :u"),
             {"u": username},
@@ -249,3 +267,46 @@ def record_login_failure(username: str, locked_until: datetime | None) -> None:
 def clear_login_failures(username: str) -> None:
     with get_engine().begin() as conn:
         conn.execute(text("DELETE FROM login_attempts WHERE username = :u"), {"u": username})
+
+
+# ---- Failed-login throttling, per (username, ip) — the real lockout ---------
+def get_login_attempt_ip(username: str, ip: str) -> dict | None:
+    with db_read() as conn:
+        row = conn.execute(
+            text("""SELECT username, ip, fails, locked_until FROM login_attempts_ip
+                    WHERE username = :u AND ip = :i"""),
+            {"u": username, "i": ip},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def record_login_failure_ip(username: str, ip: str, locked_until: datetime | None) -> None:
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    lock = locked_until.strftime("%Y-%m-%dT%H:%M:%S") if locked_until else None
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("""INSERT INTO login_attempts_ip (username, ip, fails, locked_until, last_try)
+                    VALUES (:u, :i, 1, :l, :n)
+                    ON CONFLICT (username, ip) DO UPDATE
+                      SET fails = login_attempts_ip.fails + 1,
+                          locked_until = :l,
+                          last_try = :n"""),
+            {"u": username, "i": ip, "l": lock, "n": now},
+        )
+
+
+def clear_login_failures_ip(username: str, ip: str) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("DELETE FROM login_attempts_ip WHERE username = :u AND ip = :i"),
+            {"u": username, "i": ip},
+        )
+
+
+def purge_stale_login_attempts_ip(older_than_hours: int = 24) -> None:
+    """Bound the table's growth: an unauthenticated caller can write a row for
+    any username/ip pair it likes, so rows must age out regardless of whether
+    they ever reached a lock."""
+    cutoff = (datetime.now() - timedelta(hours=older_than_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    with get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM login_attempts_ip WHERE last_try < :c"), {"c": cutoff})

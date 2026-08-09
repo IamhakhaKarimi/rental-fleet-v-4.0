@@ -11,8 +11,11 @@ Database access foundation.
   works on first launch with no manual import step.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from config.settings import DB_PATH
 
@@ -132,6 +135,73 @@ def get_engine() -> Engine:
     return _engine
 
 
+# ── Request-scoped read connections (Phase 5 / M3) ────────────────────────────
+# 57 repository call sites each open and close their own `get_engine().connect()`
+# for a single SELECT. Each one contends for SQLite's single writer while
+# pinning a threadpool slot, and each becomes a network round-trip once a
+# Postgres migration lands. `db_read()` lets a request reuse ONE connection
+# across every read it makes, bound by `api/middleware.py#RequestScopedDBMiddleware`.
+#
+# Deliberately scoped to READS ONLY (per the sequencing note in CLAUDE.md):
+# sharing a connection across write sites would change transaction semantics —
+# a nested `get_engine().begin()` would need savepoints to stay correct, which
+# is a real risk this change does not need to take on. Writes are untouched and
+# keep opening their own short `begin()` transaction exactly as before.
+#
+# The connection is opened LAZILY, on the first `db_read()` call, rather than
+# up front in the middleware. `get_engine().connect()` is a blocking file
+# call, and the middleware's `__call__` runs directly on the event loop —
+# opening it there would be exactly the "blocking call inside `async def`"
+# mistake CLAUDE.md's rule 1 exists to catch. Deferring the open into the
+# request's own sync execution (which FastAPI already runs in a worker thread
+# for a sync `def` route) keeps every blocking call off the loop; only a cheap
+# contextvar bind happens in the middleware itself.
+class _ConnHolder:
+    __slots__ = ("conn",)
+
+    def __init__(self) -> None:
+        self.conn: Connection | None = None
+
+
+_request_conn_holder: ContextVar["_ConnHolder | None"] = ContextVar(
+    "_request_conn_holder", default=None
+)
+
+
+@contextmanager
+def db_read():
+    """A read connection, reused for the rest of the current request if one is
+    already bound (the common case under FastAPI); otherwise opens and closes
+    its own — so this is always safe to call from background tasks, scripts,
+    and tests where no request-scoping middleware is running."""
+    holder = _request_conn_holder.get()
+    if holder is not None:
+        if holder.conn is None:
+            holder.conn = get_engine().connect()
+        yield holder.conn
+        return
+    conn = get_engine().connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def bind_request_connection_holder() -> tuple["_ConnHolder", object]:
+    """Bind an empty holder for `db_read()` calls made during this request.
+    Returns (holder, token); the caller (the async middleware) later reads
+    `holder.conn` to know whether anything was actually opened, and must reset
+    the contextvar with the token. Splitting bind/close this way lets the
+    close happen off the event loop (see RequestScopedDBMiddleware)."""
+    holder = _ConnHolder()
+    token = _request_conn_holder.set(holder)
+    return holder, token
+
+
+def reset_request_connection_holder(token) -> None:
+    _request_conn_holder.reset(token)
+
+
 # ── Postgres compatibility shims ──────────────────────────────────────────────
 # The app's SQL was written for SQLite. Rather than rewrite every query, we define
 # a couple of SQLite-named functions in Postgres so the existing SQL runs unchanged:
@@ -233,12 +303,15 @@ def init_db():
         from data.seed.import_csv import seed_vehicles_from_csv
         seed_vehicles_from_csv(get_engine())
     # Make sure at least one super-admin exists so the app can be logged into.
-    from services.auth_service import ensure_default_admin
-    ensure_default_admin()
+    # No-ops after the very first boot (see ensure_bootstrap_admin's marker) —
+    # emptying the users table later must never recreate a default admin.
+    from services.auth_service import ensure_bootstrap_admin
+    ensure_bootstrap_admin()
     # Hygiene/security: drop expired remember-me sessions so the table can't grow
     # unbounded and stale tokens can't linger. Cheap (indexed) and idempotent.
-    from data.repositories.users import purge_expired_sessions
+    from data.repositories.users import purge_expired_sessions, purge_stale_login_attempts_ip
     purge_expired_sessions()
+    purge_stale_login_attempts_ip()
 
 
 def _migrate_users():

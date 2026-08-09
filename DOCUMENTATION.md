@@ -32,6 +32,18 @@
    - 5.5 Seed & Reset
 6. [Deployment](#6-deployment)
 7. [Environment Reference](#7-environment-reference)
+8. [Security & Runtime Hardening](#8-security--runtime-hardening) — **production-readiness plan**
+   - 8.1 Threat Model & Deployment Shape
+   - 8.2 Audit Findings (severity-ranked)
+   - 8.3 Layered Rate Limiting (L0–L4)
+   - 8.4 Concurrency & Thread Saturation
+   - 8.5 Session & Authentication Model
+   - 8.6 Runtime Performance
+   - 8.7 Tuning Knobs
+   - 8.8 SQLite → Postgres Migration Trigger
+   - 8.9 Nginx Reference Configuration
+   - 8.10 Phased Rollout & Verification
+   - 8.11 Phase 0 — Measured Baseline
 
 ---
 
@@ -1005,3 +1017,392 @@ CORS_ORIGINS=http://localhost:3000
 # Backend API base URL — NO trailing slash
 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001
 ```
+
+---
+
+## 8. Security & Runtime Hardening
+
+> ## STATUS — Phases 0–3 shipped, 4–6 outstanding
+>
+> **Shipped:** the event-loop fix (C2), upload/body caps (H2), the JWT boot guard
+> (C1), the db-health leak (H4), security headers (M1), proxy-aware client IPs (M2),
+> the L1–L3 rate limiter, and the L4 concurrency semaphores. All verified by
+> measurement — see 8.11.
+>
+> **NOT yet shipped:** session revocation (H1), the `admin`/`admin` bootstrap (C3),
+> the lockout DoS (H3), the cookie migration + CSRF check (M9), and the performance
+> work in 8.6. **The app is still not ready for public exposure** — C3 and H1 alone
+> are disqualifying. Treat the current build as safe on a trusted LAN.
+>
+> Each item is tagged `[ ]` (outstanding) or `[x]` (shipped). Keep the tags current.
+
+### 8.1 Threat Model & Deployment Shape
+
+**Target:** a single VPS running Nginx as a reverse proxy in front of one uvicorn
+process, serving the Next.js frontend and the FastAPI backend **from the same
+origin** (frontend at `/`, backend proxied at `/api`). SQLite on local disk.
+
+Same-origin deployment is a deliberate security choice, not just convenience — it
+removes CORS from the picture entirely and makes `HttpOnly` cookies viable, which is
+what closes the token-theft hole described in 8.5.
+
+**Who we are defending against, in priority order:**
+
+1. **Untargeted internet background noise** — credential stuffing, vulnerability
+   scanners, and bots that will find the host within hours of it having a public DNS
+   record. This is the threat that actually materialises, and it is what L0–L2 exist for.
+2. **A malicious or compromised staff account** — the app is multi-tenant by role, and
+   an `employer`-level account can already reach expensive endpoints. This is what L3,
+   L4 and the per-account limits exist for.
+3. **An accidental self-DoS** — a runaway browser tab, a retry loop, or twenty staff
+   hitting a report at 09:00 on the first of the month. Empirically the most likely
+   outage cause, and the reason limits must be per-account as well as per-IP.
+
+**Explicitly out of scope:** a determined targeted attacker with resources, physical
+access to the VPS, and supply-chain compromise of the dependency tree.
+
+**One structural fact drives the whole limiter design:** a rental office NATs to a
+*single public IP*, and staff on mobile data share a carrier CGNAT address with
+thousands of strangers. Per-IP limiting alone is therefore both **too coarse** (one
+staff member's runaway tab locks out the whole office) and **too leaky** (an attacker
+on mobile data shares a bucket with innocent users). Per-account limiting is not a
+refinement here — it is load-bearing.
+
+### 8.2 Audit Findings
+
+Ranked by severity. File references are to the state of the code at the time of the audit.
+
+#### Critical — blocks public deployment
+
+| # | Status | Finding | Location |
+|---|---|---|---|
+| C1 | `[x]` | `jwt_secret` defaults to `"dev-insecure-change-me-please"` and nothing checks it at boot. If `JWT_SECRET` is unset in production, **anyone can forge a `super_admin` token** and the entire RBAC layer is decorative. | `api/settings.py:24` |
+| C2 | `[x]` | Four `async def` endpoints perform blocking CPU work **directly on the event loop** — Pillow encode/resize, `json.loads` of an arbitrary-size body, and a full database import. One staff member uploading eight car photos freezes the whole API for everyone. Note this also stalls any middleware-based rate limiter, since that shares the same loop. | `routers/photos.py:49`, `routers/settings_business.py:166,197,580` |
+| C3 | `[x]` | ~~`ensure_default_admin()` seeds `admin`/`admin`~~ — replaced by `ensure_bootstrap_admin()`: env-seeded (`BOOTSTRAP_ADMIN_USER`/`PASSWORD`, required when `COOKIE_SECURE=true`), a `bootstrap_completed` marker in `app_settings` prevents any re-seed after the first boot, and dev falls back to a random logged-once password instead of a constant. `DEPLOY.md` step 5 is still stale and must not be followed until Phase 6. | `services/auth_service.py:148` |
+| C4 | `[x]` | **No rate limiting of any kind** on any of the 140 endpoints. The only throttle in the system is a per-account login lockout, which is itself a DoS vector (see H3). | `api/main.py` |
+
+#### High
+
+| # | Status | Finding | Location |
+|---|---|---|---|
+| H1 | `[x]` | ~~Logout only clears the cookie~~ — sessions are now tracked by `jti` in the `sessions` table; `deps.py` validates the `jti` on every request (folded into the existing user re-read, no extra query), logout deletes just that session, and a new `logout-all` endpoint revokes every session for the account. Frontend still also persists a Bearer token in `localStorage` — closing that gap is M9 (cookie-only auth). | `api/security.py`, `api/deps.py`, `routers/auth.py:124` |
+| H2 | `[x]` | `await file.read()` is unbounded on all four upload endpoints, and there is no request body size cap anywhere in the stack. A single request can exhaust process memory. | as C2 |
+| H3 | `[x]` | ~~Failed-login lockout is keyed on username alone~~ — replaced with a new `login_attempts_ip` table keyed on `(username, ip)` with exponential backoff (15min base, doubling, capped at 4h), so an attacker can only ever lock out their own IP's attempts against a name. The old username-only table is now a delay-only global friction counter (2s once 20+ failures pile up across IPs) and can no longer lock anyone out. `_client_ip` unified with `api/middleware.py#client_ip` (proxy-aware). Rows purged past a 24h retention window regardless of lock status. | `services/auth_service.py:117`, `data/repositories/users.py:283` |
+| H4 | `[x]` | `/internal/db-health` is unauthenticated and returns `str(exc)` on failure. For a connection error this can include the database host and credentials. | `api/main.py:91` |
+| H5 | `[x]` | No concurrency cap on any route. 136 of 140 endpoints are synchronous `def` and share AnyIO's **default 40-thread** pool; a single timeline export can span 36 pages (`_MAX_MONTH_PAGES`). Forty concurrent heavy requests stall every subsequent request, and `backup.sqlite` additionally reads an entire generated database into memory. | `routers/timeline.py:37`, `ui/pdf.py`, `routers/settings_business.py` |
+
+#### Medium
+
+| # | Status | Finding | Location |
+|---|---|---|---|
+| M1 | `[x]` | No security headers — no HSTS, `X-Content-Type-Options`, frame-options, COOP, or CSP. | `api/main.py` |
+| M2 | `[x]` | No `TrustedHostMiddleware` and no `X-Forwarded-For` handling. **Behind Nginx every request appears to originate from the proxy**, so any per-IP limit silently degrades into one shared global bucket — a self-inflicted outage waiting to happen. Must land *with* L1, never after. | `routers/auth.py:39` |
+| M3 | `[x]` | ~~108 connection-open sites~~ — the 57 read sites (`get_engine().connect()`) now go through `core/db.py#db_read()`, which reuses ONE connection per GET/HEAD request via `api/middleware.py#RequestScopedDBMiddleware`. Scoped to reads only, per the sequencing note: writes keep independent `get_engine().begin()` transactions untouched, so no transaction semantics changed. The connection opens lazily inside the request's own sync execution (not in the async middleware itself) and closes via a worker thread — verified the contextvar propagates correctly across FastAPI's `run_in_threadpool` boundary. | `core/db.py`, `api/middleware.py#RequestScopedDBMiddleware` |
+| M4 | `[ ]` | `list_customers` runs **7 correlated subqueries per row** and `list_customers_enriched` runs **4**, each re-scanning `rentals` for every customer. ⚠️ **Measured at 0.9 ms (8.11) — not a current problem.** Ranked too high on inspection alone; deferred. The shape is still O(customers x rentals), so revisit if the customer count grows ~10x. | `data/repositories/customers.py:98`, `:67` |
+| M5 | `[ ]` | No pagination on the vehicles / customers / rentals list endpoints (17 `list_*` repository functions). Response size and query cost grow without bound as the business does. | `data/repositories/` |
+| M6 | `[ ]` | N+1 thumbnails — `VehicleThumb` issues one HTTP request per vehicle on Fleet load, each consuming a threadpool slot and a database read. | `routers/vehicles.py:92` |
+| M7 | `[ ]` | `busy_timeout = 5000` lets a request pin a thread for a full 5 seconds under write contention, doing nothing. | `core/db.py:126` |
+| M8 | `[ ]` | `CORS_ALLOW_LAN=1` admits **any** RFC-1918 origin with `allow_credentials=True`. Acceptable for the launcher's LAN mode; must never be enabled on a public host. | `api/settings.py:77` |
+| M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote `NEXT_PUBLIC_API_BASE`. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. LAN mode verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
+
+#### Verified sound — do not "fix" these
+
+Recorded so future audits do not waste effort re-litigating them:
+
+- **Invoice HTML is properly escaped** — `_html.escape` at `ui/invoice.py:40`, with an explicit `javascript:`/`data:` URL guard at `ui/invoice_links.py:88`.
+- **All SQL is parameterised.** No string interpolation of user input into queries.
+- **The dual-dialect layer is complete.** The only remaining references to `GLOB` / `INSERT OR IGNORE` / `lastrowid` are *comments* stating they were rewritten.
+- **The password policy is strong** — 10 characters, 3 of 4 character classes, a common-password denylist, username-derived rejection, and correct 72-*byte* bcrypt truncation handling for multi-byte Turkish/Albanian characters.
+- **`password_changed_at` genuinely invalidates older tokens** (`api/deps.py:49`), so a password reset really does terminate other sessions.
+- **Re-reading the user row per request** means demotion and deactivation take effect immediately rather than lingering until token expiry. This costs one indexed read per request and is the right trade — and it is what makes the `jti` registry in 8.5 free.
+
+### 8.3 Layered Rate Limiting (L0–L4)
+
+Five layers, each catching what the layer above structurally cannot. The value is in
+the **different keys**, not in stacking counters.
+
+| Layer | Keyed on | Runs in | Catches | Cannot catch |
+|---|---|---|---|---|
+| **L0** | IP, connection | Nginx | Volumetric floods and oversized bodies, **before Python allocates memory**; survives app restarts | Anything requiring knowledge of who the user is |
+| **L1** | Client IP | App middleware | Credential stuffing, scraping, unauthenticated abuse | Abuse from inside the office's shared NAT IP |
+| **L2** | JWT subject (account) | App middleware | One user — or one compromised account — consuming the office's shared IP budget | Unauthenticated traffic (no subject exists yet) |
+| **L3** | Route cost class | App middleware | Cheap-looking request counts hiding expensive work | Sustained *concurrent* load within budget |
+| **L4** | Semaphores (user + global) | App dependency | **Concurrency**, not rate — N simultaneous long operations | Sheer request volume (that is L0–L3's job) |
+
+**Why L4 is not redundant with L1–L3.** Rate limiting and concurrency limiting solve
+different problems, and this distinction is the single most important idea in this
+section. A limit of "10 PDF exports per minute" does nothing to stop ten *simultaneous*
+36-page exports, because ten requests per minute is a perfectly legal rate. Those ten
+requests occupy ten threads for the entire duration of the render. Only a semaphore
+bounds that. **Rate limits bound arrivals; semaphores bound residency.**
+
+**Algorithm choice.** L1–L3 use a **token bucket**, not the fixed-window counter used
+in the v4.1 fork. A fixed window permits a **2× boundary burst** — 120 requests in the
+final second of one window plus 120 in the first second of the next is 240 requests in
+roughly two seconds, while never technically breaching "120 per minute". A token
+bucket with an explicit burst allowance expresses the intent directly and degrades
+smoothly.
+
+**Route cost classes (L3).** Every route belongs to exactly one class. A route with no
+declared class **inherits the strictest**, so forgetting to classify fails safe:
+
+| Class | Contents | Budget |
+|---|---|---|
+| `cheap` | Reads, lookups, `/api/health`, i18n bundles | Generous |
+| `write` | Ordinary CRUD mutations | Moderate |
+| `heavy` | PDF exports, all `/api/data/*` backups, imports, photo uploads | Strict, and also gated by L4 |
+
+**Storage.** The limiter is **in-process and must stay out of the database.** It is
+deliberately dialect-agnostic so the Postgres migration in 8.8 cannot break it, and
+keeping it out of SQLite avoids adding write contention to the very resource under
+pressure. This is correct and exact for the single-process deployment in 8.1. Scaling
+to multiple workers or instances requires a shared store (Redis) — see 8.7.
+
+**Failure mode.** Every limiter rejection returns `429` with a `Retry-After` header,
+and the frontend must surface it as a human message rather than a generic error.
+
+### 8.4 Concurrency & Thread Saturation
+
+Three distinct problems, three distinct fixes.
+
+**1. Blocking work on the event loop (C2) — the acute bug.** Four endpoints are
+declared `async def` and then call synchronous CPU-bound code. In an async framework
+this is the worst case: unlike a sync endpoint, which at least runs in a worker thread,
+this halts *everything* — every other request, every background task, and the rate
+limiter itself. Fix: wrap the blocking call in
+`starlette.concurrency.run_in_threadpool`.
+
+> **This is the single highest-value fix in this document.** It is a handful of lines
+> and it converts a whole-service outage into a slow request.
+
+**2. An unbounded, untuned thread pool (H5).** 136 sync endpoints share AnyIO's default
+40 threads. That default is a general-purpose guess, not a decision anyone made about
+this workload. Fix: set the limit deliberately, informed by the Phase 0 measurements —
+higher than 40 is appropriate for a pool that is mostly waiting on SQLite, but it must
+be a chosen number with a rationale.
+
+**3. No residency bound on expensive work (the actual ask).** Fix: two semaphores.
+
+- A **global heavy semaphore** caps total concurrent expensive operations, protecting the box.
+- A **per-user semaphore** caps how many one account may hold, so no single user can occupy the global pool. This is the "over-stimulated process threads" control specifically.
+
+Behaviour at the cap is a short bounded wait, then `429` with `Retry-After` — never an
+unbounded queue, which merely relocates the stall and exhausts memory while doing it.
+
+### 8.5 Session & Authentication Model
+
+**Current state.** A stateless JWT valid up to 14 days, held in `localStorage` and sent
+as a Bearer header. Logout clears only the cookie, which the frontend does not use.
+Net effect: **logout does not log you out**, and any XSS yields a two-week session that
+can be exfiltrated and replayed from anywhere.
+
+**Target state, in two coupled parts:**
+
+**Part 1 — per-token revocation via `jti`.** Each JWT carries a unique token id; a
+session registry lists live tokens per account. Logout revokes exactly that token;
+"sign out everywhere" revokes all of them. Multiple concurrent devices remain
+supported, which matters because a manager legitimately uses a desk PC and a phone.
+
+The key property: `api/deps.py` **already reads the user row on every request**, so the
+revocation check folds into a query that is already happening. Real revocation costs
+essentially nothing. This is also why the stricter single-session pinning used in the
+v4.1 fork was rejected — it buys little over a `jti` registry and bounces staff off
+their own second device.
+
+**Part 2 — move the token out of JavaScript's reach.** With Nginx serving both halves
+from one origin, the token becomes an `HttpOnly`, `Secure`, `SameSite=Strict` cookie,
+unreadable by any script. `SameSite=Strict` plus an `Origin` header check covers CSRF
+(M9) without a token-exchange dance.
+
+The Bearer path is **retained for LAN and dev mode only**, where the launcher serves the
+frontend and API on different origins and cookies are genuinely awkward. This is why
+M9 and Part 2 must ship together: enabling cookie auth without the Origin check trades
+an XSS hole for a CSRF hole.
+
+**Bootstrap and lockout (C3, H3):**
+
+- The first admin is seeded from `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD`, validated against the same password policy as any other account. Production refuses to boot without them. `admin`/`admin` is never created, and the silent re-seed on an empty users table is removed.
+- Lockout is keyed on **IP and username together**, with **exponential backoff** rather than a flat lock, so a remote attacker can no longer lock a real user out of their own account. Failed attempts against unknown usernames are bounded and purged.
+
+### 8.6 Runtime Performance
+
+Ordered by value. The first item is worth more than the rest combined.
+
+1. **One connection per request (M3).** Replace 108 independent `get_engine().connect()` calls with a request-scoped connection. This pays twice: it relieves SQLite lock contention and threadpool residency **now**, and it is what stops a future Postgres migration from feeling like a regression (see 8.8). Do this before, not after, any database change.
+2. **Fix `list_customers` (M4).** Rewrite 7 correlated subqueries per row as window functions or a single join.
+3. **Paginate the list endpoints (M5).** Cost currently grows with the size of the business.
+4. **Batch the fleet thumbnails (M6).** One request per vehicle is one threadpool slot per vehicle.
+5. **Revisit `busy_timeout` (M7)** once semaphores bound write concurrency — with contention controlled, a 5-second block should become unreachable rather than merely rarer.
+
+### 8.7 Tuning Knobs
+
+All values are env-configurable, and now carry **provisional shipped defaults** set
+in `api/settings.py`. They are informed by the Phase 0 measurements in 8.11 but are
+deliberately generous — they exist so the mechanism is live and fails safe, not
+because this workload has been load-tested at production concurrency. Re-run
+`backend/tools/bench_components.py` and `bench_http.py` after any change that moves
+these numbers.
+
+| Knob | Governs | Notes |
+|---|---|---|
+| `RATE_LIMIT_ENABLED` | Master switch | Off for LAN/dev, on in production |
+| `RATE_LIMIT_IP_*` | L1 token bucket rate + burst | |
+| `RATE_LIMIT_ACCOUNT_*` | L2 per-account rate + burst | |
+| `RATE_LIMIT_COST_*` | L3 per-class budgets | One per cost class |
+| `HEAVY_CONCURRENCY_GLOBAL` | L4 global semaphore | Start low; raise only with evidence |
+| `HEAVY_CONCURRENCY_PER_USER` | L4 per-account semaphore | Start at 1 |
+| `THREADPOOL_MAX` | AnyIO thread limit | Replaces the inherited default of 40 |
+| `MAX_UPLOAD_BYTES` | Per-file upload cap | Enforced at Nginx **and** in the app |
+| `MAX_REQUEST_BYTES` | Total body cap | |
+| `TRUST_PROXY` | Whether to read `X-Forwarded-For` | **On behind Nginx, off otherwise.** Wrong either way breaks per-IP limiting — see M2 |
+| `BOOTSTRAP_ADMIN_USER` / `_PASSWORD` | First-run admin | Required in production |
+
+**Scaling note.** Every limiter value above is **per process**. Running more than one
+uvicorn worker multiplies the effective limits by the worker count. Moving beyond a
+single process requires a shared counter store first; do not raise the worker count
+and assume the limits still hold.
+
+### 8.8 SQLite → Postgres Migration Trigger
+
+**Decision: stay on SQLite for now.** For an office-sized deployment on local disk it
+is the fastest option available, because this application is *chatty* — the 108
+connection-open sites in M3 mean a single page load makes many round-trips, which are
+nearly free against a local file and costly against a network database. The managed
+Turso/Neon path described in section 6 would measurably **slow the application down**
+unless M3 lands first.
+
+**Postgres is already a configuration change, not a project.** The dual-dialect layer
+in `core/db.py` is complete: the only SQLite-specific SQL remaining in live queries is
+`strftime` and `datetime('now')`, both covered by the `_PG_SHIMS` functions installed
+on Postgres. Setting `DATABASE_URL=postgres://…` genuinely is the migration.
+
+**Protect that property.** Nothing new may be added that assumes SQLite — in
+particular the rate limiter stays in-process (8.3) rather than becoming a table.
+
+**Migrate when measured, not when it feels slow.** The trigger is `SQLITE_BUSY` /
+lock-wait events crossing a defined threshold in the monitoring added in Phase 2.
+SQLite's single-writer lock is the real ceiling; concurrent *reads* are unaffected by
+it, so read slowness is evidence for 8.6, **not** evidence for migrating.
+
+### 8.9 Nginx Reference Configuration
+
+Nginx provides L0 and the same-origin arrangement that 8.5 depends on. It contributes
+three things the application cannot do for itself:
+
+- **`client_max_body_size`** rejects oversized uploads before Python allocates a single byte (H2). An application-level check necessarily runs after the body has begun arriving.
+- **`limit_req` / `limit_conn`** absorb volumetric floods outside the Python process, so an attack cannot consume the workers that would serve the 429s.
+- **Limits that survive an application restart**, unlike the in-process buckets.
+
+Two correctness requirements: Nginx must set `X-Forwarded-For`/`X-Real-IP` **and** the
+app must set `TRUST_PROXY=true`. Setting neither means every request looks like it came
+from the proxy and the entire company shares one bucket; setting only the latter lets a
+client spoof its own IP and bypass L1 entirely.
+
+*(Concrete configuration to be written in Phase 6, once the measured limits exist.)*
+
+### 8.10 Phased Rollout & Verification
+
+| Phase | Contents | Gate |
+|---|---|---|
+| **0 · Measure** | Time PDF builds, `backup.sqlite`, photo encode; count queries and connections per page load; record p50/p95 under simulated office load | **No limit or semaphore value is chosen before this.** These numbers are the acceptance baseline for every later phase |
+| **1 · Critical** | C1 boot guard, C2 event-loop offload, H2 size caps, H4 db-health | `/api/health` stays responsive during a photo upload |
+| **2 · Limiting** | L0–L3, `TRUST_PROXY` + `TrustedHostMiddleware` (M2), security headers (M1), request-id logging, generic errors | A single account cannot exhaust the office IP budget; a window-boundary burst is smoothed, not doubled |
+| **3 · Concurrency** | L4 semaphores, deliberate thread limit, bounded exports | N concurrent 36-page exports cap cleanly; ordinary requests stay responsive; excess gets `429` + `Retry-After` |
+| **4 · Auth** | `jti` registry, cookie migration + Origin check (M9), bootstrap admin (C3), IP-aware backoff (H3) | Logout kills that token immediately, other devices survive, "sign out everywhere" kills all |
+| **5 · Performance** | M3 request-scoped connections, M4, M5, M6 | p95 for normal reads improves and does not regress |
+| **6 · Deploy** | Nginx same-origin config, HSTS, `.env.production.example`, migration trigger | Full pass against the Phase 0 baseline |
+
+**Sequencing constraints that are not negotiable:**
+
+- **M2 ships with L1, never after.** A per-IP limiter behind an unconfigured proxy is worse than no limiter — it is a company-wide outage with extra steps.
+- **M9 ships with the cookie migration.** Separating them trades an XSS hole for a CSRF hole.
+- **M3 ships before any Postgres migration**, or the migration will read as a performance regression.
+- **Phase 0 precedes everything.** Every number in 8.7 is otherwise a guess wearing a configuration file as a disguise.
+
+**Testing.** The repository currently has **no test suite**. Each phase adds targeted
+tests for the behaviour it introduces; the concurrency and limiter phases in particular
+cannot be verified by inspection and need tests that actually generate load.
+
+### 8.11 Phase 0 — Measured Baseline
+
+Measured against an **isolated replica** of the live database (real data volume, a
+throwaway admin account, real data never touched). Harness lives in
+`backend/tools/` — `bench_components.py` (in-process timings + SQL counts) and
+`bench_http.py` (concurrency behaviour over HTTP). Re-run both after every phase.
+
+**Dataset at time of measurement:** 13 vehicles, 42 customers, 48 rentals — i.e. the
+real scale of this business, which is small. Several conclusions below hold *because*
+of that and would change at 10x.
+
+#### Component timings
+
+| Operation | p50 | max | SQL queries | connections |
+|---|---|---|---|---|
+| `list_vehicles()` | 0.2 ms | 0.3 ms | 1 | 1 |
+| `list_customers()` — 7 correlated subqueries/row | **0.9 ms** | 1.3 ms | 1 | 1 |
+| `list_customers_enriched()` — 4/row | 0.9 ms | 1.3 ms | 1 | 1 |
+| `list_all_rentals_with_vehicle()` | 0.5 ms | 0.8 ms | 1 | 1 |
+| Invoice HTML (1 deal) | 46 ms | 53 ms | 6 | 6 |
+| **Invoice PDF (1 deal, 2 A4 copies)** | **201 ms** | 314 ms | 10 | 10 |
+| Timeline PDF — 1 month | 110 ms | 457 ms | 0 | 0 |
+| Timeline PDF — 36 months (`_MAX_MONTH_PAGES`) | 99 ms | 180 ms | 0 | 0 |
+| `admin_ops.export_all()` (whole DB) | 9 ms | 24 ms | 10 | 1 |
+| `encode_photo` — 2 MP | 33 ms | 36 ms | 0 | 0 |
+| **`encode_photo` — 12 MP (modern phone)** | **125 ms** | 126 ms | 0 | 0 |
+
+**Four findings that changed the plan's priorities:**
+
+1. **The event-loop block was the only severe runtime issue, and it is quantified.**
+   8 phone photos x 125 ms = ~1 second of fully frozen event loop per upload.
+2. **M4 (`list_customers`' 7 correlated subqueries) is a non-issue at this scale** —
+   0.9 ms. It was ranked too high on inspection alone. Revisit only if the customer
+   count grows by an order of magnitude; the query shape is still O(customers x rentals).
+3. **The 36-page timeline PDF is not the threat it looked like** — 99 ms, no worse
+   than a 1-month export, because most months contain no rentals and render nearly
+   empty. Page count is not the cost driver; font loading is (note the 457 ms max on
+   the *first* PDF, which is DejaVu TTF parsing, then ~100 ms warm).
+4. **Backups are cheap** (9 ms) at a 319 KB database. `backup.sqlite` reading the
+   whole file into memory is fine now and scales linearly — worth revisiting only if
+   photo volume grows substantially.
+
+#### C2 — event-loop blocking, before vs after
+
+Identical load (8 x 12 MP upload) against the same replica, measuring `/api/health`
+latency *concurrently*:
+
+| | health p50 | **health max** | probes served |
+|---|---|---|---|
+| Pre-fix (blocking `encode_photo`) | 15.5 ms | **958.5 ms** | 12 |
+| Fixed (`run_in_threadpool`) | 13.6 ms | **29.4 ms** | 49 |
+
+**32x better worst-case latency, and 4x more requests served in the same window.**
+The 958 ms stall corroborates the component measurement almost exactly (8 x 125 ms),
+which is the strongest evidence that the diagnosis was right: the event loop was
+blocked for precisely as long as the encoding took.
+
+#### L4 — concurrency cap
+
+30 simultaneous invoice PDF requests from one account (`heavy_concurrency_global=3`,
+`heavy_concurrency_per_user=1`, 5 s acquire timeout):
+
+- **22 completed 200**, **8 shed as 429** with `Retry-After`. Nothing hung; nothing
+  queued unboundedly. `/internal/stats` attributed all 8 to
+  `concurrency.rejected.per_user`, which is the per-user cap doing exactly its job.
+- At 8-way concurrency, all 8 completed (p50 1.5 s) — serialized by the per-user cap
+  and still inside the timeout. **The cap sheds load only when it must**, which is
+  the intended behaviour: bound residency first, reject only as a last resort.
+
+#### L1–L3 — rate limiting
+
+15 rapid requests to a public endpoint in the strict `auth` bucket returned
+**5 x 200 then 10 x 429** with `Retry-After: 3`. Note the cut-in at 5, not 10: the
+sustained rate is 10/min but the token-bucket *burst* is `limit // 2` = 5. Burst and
+rate are separate dials, and the burst is what a user actually feels — worth setting
+explicitly rather than deriving, when these are tuned for real.
+
+#### Not yet measured
+
+- Behaviour at 10x data volume (the M4/M5 pagination question).
+- Sustained multi-user load over minutes rather than seconds.
+- `SQLITE_BUSY` / lock-wait rates under concurrent writes — the 8.8 migration trigger.
+  Reads are demonstrably fast; the write path is the open question.

@@ -14,7 +14,7 @@ available_vehicles: answers "which cars are free for [start, end)?" using an
 
 from datetime import datetime, date, time, timedelta
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read
 
 
 def compute_return(start_date: date, start_time: time, days: int, return_time: time) -> datetime:
@@ -55,7 +55,7 @@ def is_vehicle_free(vehicle_id: str, req_start: datetime, req_end: datetime) -> 
     sql = """SELECT 1 FROM rentals r
              WHERE r.vehicle_id = :v AND r.status = 'Active'
                AND MAX(r.start_dt, :s) < MIN(r.end_dt, :e) LIMIT 1"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         clash = conn.execute(text(sql), {"v": vehicle_id, "s": s, "e": e}).first()
     return clash is None
 
@@ -82,5 +82,5 @@ def available_vehicles(req_start: datetime, req_end: datetime) -> list[dict]:
           )
         ORDER BY v.vehicle_id
     """
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql), {"s": s, "e": e}).mappings().all()]

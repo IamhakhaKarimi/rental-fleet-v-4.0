@@ -1,11 +1,15 @@
 /**
  * Tiny fetch wrapper for the FastAPI backend.
  *
- * Auth: the backend accepts either the HttpOnly `bcr_session` cookie OR an
- * `Authorization: Bearer <jwt>` header. We use the Bearer header (token kept in
- * memory + localStorage) so auth works even when the frontend and API are on
- * different origins in dev (cross-site cookies are awkward); the cookie still
- * works for same-site production. Error bodies carry an i18n key in `detail`.
+ * Auth: the HttpOnly `bcr_session` cookie is the normal path — same-origin
+ * (production) or same-host-different-port (dev, the launcher's LAN mode),
+ * where `SameSite=Strict` still flows. The token is never written to
+ * `localStorage`/`sessionStorage` anymore (M9: an XSS payload that can read
+ * disk used to just lift the session outright). The one case a token is
+ * still kept, in memory only, is an explicit REMOTE `NEXT_PUBLIC_API_BASE`
+ * (the old Vercel/Render split in DEPLOY.md) — a genuinely cross-site
+ * deployment where the cookie cannot follow, so the Bearer header is the
+ * only way auth works at all, and losing it on refresh is expected there.
  */
 /**
  * Where the API lives.
@@ -49,34 +53,25 @@ export function apiBase(): string {
 
 let authToken: string | null = null;
 
-const TOKEN_KEY = "bcr_token";
+/** True only for an explicit, genuinely remote API base — see apiBase() above. */
+function usesRemoteApi(): boolean {
+  const u = configuredUrl();
+  return !!u && !LOOPBACK.test(u.hostname);
+}
 
 /**
- * Persist the access token. `remember` decides WHERE:
- *   true  -> localStorage, so the session survives closing the browser
- *            (matched by the backend's longer "remember me" token lifetime).
- *   false -> sessionStorage, so the token dies with the tab/window. Without this
- *            an unticked "remember me" still left a token on disk, which made the
- *            checkbox purely cosmetic on the client.
- * The other store is always cleared so a stale token can't outlive the choice.
+ * Hold the access token in memory for this page load. Never written to disk:
+ * the cookie is the durable session now, so there is nothing to persist across
+ * a reload in the normal (same-origin / same-host) case. Only kept at all when
+ * `usesRemoteApi()` — a cross-site deployment where the cookie cannot follow
+ * and the Bearer header is the only way auth works.
  */
-export function setAuthToken(token: string | null, remember: boolean = true) {
-  authToken = token;
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(TOKEN_KEY);
-  window.sessionStorage.removeItem(TOKEN_KEY);
-  if (token) {
-    (remember ? window.localStorage : window.sessionStorage).setItem(TOKEN_KEY, token);
-  }
+export function setAuthToken(token: string | null) {
+  authToken = usesRemoteApi() ? token : null;
 }
 
 export function loadAuthToken(): string | null {
-  if (authToken) return authToken;
-  if (typeof window !== "undefined") {
-    authToken =
-      window.sessionStorage.getItem(TOKEN_KEY) || window.localStorage.getItem(TOKEN_KEY);
-  }
-  return authToken;
+  return usesRemoteApi() ? authToken : null;
 }
 
 export class ApiError extends Error {

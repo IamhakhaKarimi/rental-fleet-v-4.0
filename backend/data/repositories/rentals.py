@@ -2,13 +2,13 @@
 from datetime import datetime
 from sqlalchemy import text
 from config.settings import LANGUAGES, DEFAULT_LANG
-from core.db import get_engine
+from core.db import db_read, get_engine
 from data.repositories.customers import get_or_create_customer
 
 
 def next_deal_id() -> str:
     prefix = f"RENT-{datetime.now().strftime('%Y%m')}-"
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         rows = conn.execute(
             text("SELECT deal_id FROM rentals WHERE deal_id LIKE :p"), {"p": prefix + "%"}
         ).scalars().all()
@@ -26,7 +26,7 @@ def list_active_rentals_with_vehicle() -> list[dict]:
              JOIN customers c ON c.customer_id = r.customer_id
              WHERE r.status = 'Active'
              ORDER BY r.end_dt"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
 
 
@@ -42,7 +42,7 @@ def list_all_rentals_with_vehicle() -> list[dict]:
              JOIN vehicles  v ON v.vehicle_id  = r.vehicle_id
              JOIN customers c ON c.customer_id = r.customer_id
              ORDER BY r.start_dt"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
 
 
@@ -54,7 +54,7 @@ def list_all_rentals() -> list[dict]:
              JOIN vehicles  v ON v.vehicle_id  = r.vehicle_id
              JOIN customers c ON c.customer_id = r.customer_id
              ORDER BY r.start_dt DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
 
 
@@ -70,7 +70,7 @@ def get_rental_full(deal_id: str) -> dict | None:
              JOIN vehicles  v ON v.vehicle_id  = r.vehicle_id
              JOIN customers c ON c.customer_id = r.customer_id
              WHERE r.deal_id = :d"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(text(sql), {"d": deal_id}).mappings().first()
     return dict(row) if row else None
 
@@ -78,7 +78,7 @@ def get_rental_full(deal_id: str) -> dict | None:
 def list_charges_for_deal(deal_id: str) -> list[dict]:
     sql = """SELECT type, amount, occurred_at FROM charges
              WHERE deal_id = :d AND deleted_at IS NULL ORDER BY occurred_at, charge_id"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"d": deal_id}).mappings().all()]
 
 
@@ -89,13 +89,13 @@ def list_rentals_for_customer(customer_id: int) -> list[dict]:
                     v.make_model, v.license_plate
              FROM rentals r JOIN vehicles v ON v.vehicle_id=r.vehicle_id
              WHERE r.customer_id=:cid ORDER BY r.start_dt DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql), {"cid": customer_id}).mappings().all()]
 
 
 def vehicle_has_active_rental(vehicle_id: str) -> bool:
     """True if the vehicle currently has an Active rental (reserved / out)."""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(text(
             "SELECT 1 FROM rentals WHERE vehicle_id=:v AND status='Active' LIMIT 1"
         ), {"v": vehicle_id}).first()

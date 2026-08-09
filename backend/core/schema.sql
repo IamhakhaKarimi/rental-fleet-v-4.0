@@ -108,12 +108,29 @@ CREATE TABLE IF NOT EXISTS password_resets (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Failed-login throttling. One row per username; cleared on a successful login.
+-- Failed-login throttling, global per-username counter. Kept at a high threshold
+-- that only *delays* (never locks) so it cannot be used to deny a real user
+-- access — the actual lockout is keyed on (username, ip) in login_attempts_ip
+-- below. Cleared on a successful login.
 CREATE TABLE IF NOT EXISTS login_attempts (
     username     TEXT PRIMARY KEY,
     fails        INTEGER NOT NULL DEFAULT 0,
     locked_until TEXT,                   -- ISO datetime while locked out
     last_try     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Failed-login throttling, keyed on the (username, ip) pair. This is the real
+-- lockout: an attacker hammering a known username can only ever lock out their
+-- own pairing, never the genuine user logging in from their usual network.
+-- Exponential backoff via `fails`; rows are purged once their backoff window
+-- has passed so an unauthenticated attacker cannot grow this table unbounded.
+CREATE TABLE IF NOT EXISTS login_attempts_ip (
+    username     TEXT NOT NULL,
+    ip           TEXT NOT NULL,
+    fails        INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,                   -- ISO datetime while locked out
+    last_try     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (username, ip)
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

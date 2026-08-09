@@ -29,20 +29,28 @@ def _resolve(payload: dict | None) -> dict | None:
 
     The token's signature proves it was issued by us, but not that it still
     reflects reality, so the account row is re-read on every request. That closes
-    two gaps a purely stateless check leaves open:
+    three gaps a purely stateless check leaves open:
 
+      * a revoked session (logout / logout-all) is rejected even though the JWT
+        itself is still validly signed and unexpired;
       * a token issued before the account's last password change is rejected, so
         a password reset genuinely terminates other sessions;
       * role, name and active-flag come from the DB, so a demotion or a
         deactivation takes effect immediately instead of lingering until the
         token expires.
 
-    Costs one indexed lookup per request, which is the right trade here.
+    The session check is folded into the same query as the user re-read
+    (``get_user_with_session``), so this costs no extra round-trip over the
+    pre-revocation version. Tokens minted before the ``jti`` claim existed have
+    no session row and are rejected outright — one forced re-login, once.
     """
     if not payload:
         return None
+    jti = payload.get("jti")
+    if not jti:
+        return None
     claims = user_from_claims(payload)
-    row = users_repo.get_user(claims["username"])
+    row = users_repo.get_user_with_session(claims["username"], jti)
     if not row or not row["is_active"]:
         return None
 

@@ -2,7 +2,7 @@
 import re
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 def _digits(phone: str) -> str:
@@ -55,7 +55,7 @@ def update_customer(customer_id: int, full_name: str, phone: str, id_passport: s
 
 def get_customer(customer_id: int) -> dict | None:
     """Fetch one customer row by id (plain dict), or None if missing."""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT customer_id, full_name, phone, id_passport "
                  "FROM customers WHERE customer_id = :cid"),
@@ -91,7 +91,7 @@ def list_customers_enriched() -> list[dict]:
              LEFT JOIN rentals r ON r.customer_id = c.customer_id
              GROUP BY c.customer_id, c.full_name, c.phone, c.id_passport
              ORDER BY c.full_name"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
 
 
@@ -128,5 +128,5 @@ def list_customers() -> list[dict]:
              LEFT JOIN rentals r ON r.customer_id = c.customer_id
              GROUP BY c.customer_id
              ORDER BY c.full_name"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]

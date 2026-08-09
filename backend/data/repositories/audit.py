@@ -9,7 +9,7 @@ are swallowed.
 """
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 def record(username: str, action: str, entity: str = "",
@@ -29,5 +29,5 @@ def record(username: str, action: str, entity: str = "",
 def list_recent(limit: int = 100) -> list[dict]:
     sql = """SELECT id, username, action, entity, entity_id, detail, ts
              FROM audit_log ORDER BY id DESC LIMIT :lim"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"lim": limit}).mappings().all()]

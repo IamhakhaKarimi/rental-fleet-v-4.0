@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from api.concurrency import heavy_slot
 from api.deps import require
 from config.i18n import month_name, t_lang
 from config.settings import LANGUAGES
@@ -102,6 +103,9 @@ def timeline_pdf(
     range: str = Query("week", alias="range"),
     lang: str = "tr",
     user: dict = Depends(require("view_management")),
+    # `all_months` can render up to _MAX_MONTH_PAGES pages of Gantt grid. Rate
+    # limiting cannot bound how many run AT ONCE — only this can. See §8.4.
+    _slot: dict = Depends(heavy_slot),
 ) -> Response:
     if range not in _RANGES:
         raise HTTPException(404, detail="not_found")

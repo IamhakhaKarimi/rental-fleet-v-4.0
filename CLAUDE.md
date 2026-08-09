@@ -54,8 +54,11 @@ npm run dev
 
 ### Default admin credentials (first run)
 
-Created automatically by `init_db()` if no `super_admin` exists.
-Check `services/auth_service.py` `ensure_default_admin()` for the seeded username and password.
+Created automatically by `init_db()`, once, on a genuinely empty database — see
+`services/auth_service.py` `ensure_bootstrap_admin()`. Set `BOOTSTRAP_ADMIN_USER` /
+`BOOTSTRAP_ADMIN_PASSWORD` to pin the credentials (required when `COOKIE_SECURE=true`);
+otherwise a random password is generated and logged once. There is no more
+`admin`/`admin` default.
 
 ---
 
@@ -82,6 +85,11 @@ backend/
 |---|---|
 | `backend/api/main.py` | FastAPI app factory; mounts all 17 routers |
 | `backend/api/deps.py` | `get_current_user()`, `require(perm)` dependencies |
+| `backend/api/middleware.py` | L1–L3 rate limiting (token bucket), body caps, security headers, request timing. Pure ASGI |
+| `backend/api/concurrency.py` | L4 — `heavy_slot` dependency; global + per-user semaphores for expensive routes |
+| `backend/api/uploads.py` | `read_capped()` — the only safe way to read an upload body |
+| `backend/api/monitoring.py` | Loggers + `stats` (per-route p50/p95, served at `/internal/stats`) |
+| `backend/tools/bench_*.py` | Phase 0 benchmark harness — re-run after every hardening phase |
 | `backend/config/roles.py` | 4 roles × 25 permissions, `can(user, perm)` |
 | `backend/core/db.py` | Engine init (SQLite / Turso libSQL / Neon Postgres), `init_db()`, migrations |
 | `backend/core/schema.sql` | 11 tables, 9 indexes |
@@ -150,6 +158,94 @@ Roles: `visitor(0)` < `employer(1)` < `admin(2)` < `super_admin(3)`
   it consults the override provider installed by `services/permissions_service.py`.
   A super_admin always holds everything, and the `administration` permission group is
   never overridable (see `LOCKED_PERMISSIONS`).
+
+---
+
+## Security & Runtime Hardening
+
+> **Status: Phases 0–4 shipped, Phase 5 partially (M3); 5 (remainder)–6 outstanding.**
+> Live now: the L1–L3 rate limiter (`api/middleware.py`), L4 concurrency semaphores
+> (`api/concurrency.py`), bounded uploads (`api/uploads.py`), request timing
+> (`api/monitoring.py`), security headers, the JWT boot guard, `jti`-based session
+> revocation (logout / logout-all), env-seeded bootstrap admin (no more
+> `admin`/`admin`), `(username, ip)`-keyed login lockout with exponential backoff,
+> the `HttpOnly`-cookie + CSRF Origin check, and request-scoped read connections
+> (`core/db.py#db_read()` + `RequestScopedDBMiddleware`, M3). Verified by
+> measurement — DOCUMENTATION.md §8.11.
+>
+> **Still outstanding, and worth doing before a public VPS deployment:** the
+> pytest suite scoped to Phase 4 auth behaviour, M5 pagination on list endpoints,
+> M6 fleet-thumbnail batching, and the Nginx same-origin deployment config incl.
+> `TRUST_PROXY` (Phase 6). Full audit and phased plan: **DOCUMENTATION.md → §8**.
+
+The target deployment is a **single VPS + Nginx, same-origin** (frontend at `/`,
+API proxied at `/api`), uvicorn single process, SQLite on local disk.
+
+### Rules that must hold in new code
+
+**1. Never call blocking code inside an `async def`.**
+This is the rule that matters most. A blocking call in an `async` handler halts the
+entire service — every request, every background task, and the rate limiter itself,
+because they all share one event loop. A sync `def` handler at least gets a worker
+thread. Wrap CPU-bound or blocking work in `starlette.concurrency.run_in_threadpool`.
+Pillow encoding, PDF building, `json.loads` of a request body, and any database import
+all count. Four endpoints violate this today (see §8.2 C2) — do not add a fifth.
+
+**2. Every new route declares a cost class.**
+`cheap` (reads) / `write` (CRUD) / `heavy` (PDF, backup, import, upload). An
+unclassified route **inherits the strictest budget**, so forgetting fails safe. Any
+route that can run for seconds, allocate large buffers, or produce multi-page output is
+`heavy` and must also take the L4 concurrency semaphore — not just a rate limit.
+Rate limits bound *arrivals*; semaphores bound *residency*. Ten simultaneous 36-page
+PDF exports is a legal rate and still a stalled server.
+
+**3. The rate limiter stays in-process and out of the database.**
+It must remain dialect-agnostic so the eventual Postgres migration cannot break it, and
+adding limiter writes to SQLite would put contention on the exact resource under
+pressure. Its values are **per process** — more uvicorn workers multiply the effective
+limits, so do not raise the worker count without a shared counter store first.
+
+**4. Reuse the request-scoped connection; paginate new list endpoints.**
+There are already 108 independent `get_engine().connect()` sites (§8.2 M3). Do not add
+more. Every one contends for the SQLite write lock while pinning a threadpool slot, and
+each becomes a network round-trip after a Postgres migration.
+
+**5. Never re-enable `CORS_ALLOW_LAN` on a public host.**
+It admits any RFC-1918 origin with `allow_credentials=True`. It exists for the desktop
+launcher's LAN mode and nowhere else.
+
+**6. Uploads are always bounded.**
+Any new endpoint reading a request body needs a size cap. `await file.read()` with no
+limit is memory exhaustion from a single request.
+
+### Sequencing constraints
+
+Three pairs must land together — splitting them makes things *worse*, not partially
+better:
+
+- **`TRUST_PROXY` ships with per-IP limiting.** Behind Nginx, `request.client.host` is the *proxy's* address, so an unconfigured per-IP limiter degrades into one shared bucket for the entire company — a self-inflicted outage. Trusting `X-Forwarded-For` without Nginx actually setting it lets clients spoof their own IP and skip the limiter entirely.
+- **The CSRF Origin check ships with the `HttpOnly` cookie migration.** Alone, the cookie move trades an XSS hole for a CSRF hole.
+- **Request-scoped connections ship before any Postgres migration**, or the migration reads as a performance regression.
+
+### Environment knobs (planned)
+
+`RATE_LIMIT_ENABLED`, `RATE_LIMIT_IP_*`, `RATE_LIMIT_ACCOUNT_*`, `RATE_LIMIT_COST_*`,
+`HEAVY_CONCURRENCY_GLOBAL`, `HEAVY_CONCURRENCY_PER_USER`, `THREADPOOL_MAX`,
+`MAX_UPLOAD_BYTES`, `MAX_REQUEST_BYTES`, `TRUST_PROXY`, `BOOTSTRAP_ADMIN_USER`,
+`BOOTSTRAP_ADMIN_PASSWORD`.
+
+**Defaults are intentionally unset** until the Phase 0 measurements exist — see §8.7.
+A number invented before measuring is a guess wearing a config file as a disguise.
+
+### Database
+
+**SQLite stays for now.** This app is chatty (see rule 4), and those round-trips are
+nearly free against a local file but costly against a network database — the managed
+Turso/Neon path in `DEPLOY.md` would make it *slower*. Postgres is already just
+`DATABASE_URL=postgres://…`: the dual-dialect layer in `core/db.py` is complete, with
+only `strftime`/`datetime('now')` needing the `_PG_SHIMS`. Migrate on the measured
+trigger in §8.8 (`SQLITE_BUSY` / lock-wait events), not on a hunch — SQLite's ceiling
+is its single *writer*, so slow reads are evidence for query work, not for migrating.
 
 ---
 
@@ -381,10 +477,19 @@ Two specificity gotchas that layer already solves:
 
 ## Deployment Targets (Production)
 
+**Current plan of record — single VPS, same-origin:**
+
 | Layer | Service |
 |---|---|
-| Database | Turso (libSQL) or Neon (Postgres) |
-| Backend | Render or Railway (`backend/Dockerfile`) |
-| Frontend | Vercel (`frontend/` root dir) |
+| Database | **SQLite on local VPS disk** (Postgres later via `DATABASE_URL` — see §8.8) |
+| Backend | **uvicorn, single process**, proxied at `/api` |
+| Frontend | **Next.js served by Nginx at `/`** — same origin as the API |
+| Edge | **Nginx** — TLS, `limit_req`/`limit_conn`, `client_max_body_size` (L0) |
 
-Refer to `DEPLOY.md` for the step-by-step deployment runbook.
+Same-origin is a security requirement, not a convenience: it removes CORS entirely and
+is what makes the `HttpOnly` cookie migration possible (DOCUMENTATION.md → §8.5).
+
+> ⚠️ **`DEPLOY.md` is stale.** It documents the earlier Vercel + Render + Turso split
+> and still instructs logging in with `admin`/`admin` (§8.2 C3). Do not follow it for a
+> public deployment until it is rewritten in Phase 6. The managed-database path it
+> describes would also make the app *slower* — see the Database note above.

@@ -7,7 +7,7 @@ needs to browse and remove individual income records. SQL lives here per the
 repository layering rule. Amounts are INTEGER cents, dates ISO-8601 text.
 """
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 CHARGE_TYPES = ["rental", "overdue_penalty", "damage", "deposit", "refund"]
 
@@ -24,7 +24,7 @@ def list_charges(limit: int = 200) -> list[dict]:
              WHERE c.deleted_at IS NULL
              ORDER BY c.occurred_at DESC, c.charge_id DESC
              LIMIT :lim"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"lim": limit}).mappings().all()]
 
 

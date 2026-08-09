@@ -8,6 +8,7 @@ stays in ``services/auth_service.py`` (bcrypt) — unchanged.
 from __future__ import annotations
 
 import datetime as _dt
+import uuid
 
 import jwt
 from fastapi import Response
@@ -15,10 +16,18 @@ from fastapi import Response
 from api.settings import settings
 
 
-def create_access_token(user: dict, remember: bool = True) -> str:
-    """Encode the user dict into a signed JWT."""
+def create_access_token(user: dict, remember: bool = True) -> tuple[str, str, _dt.datetime]:
+    """Encode the user dict into a signed JWT.
+
+    Returns ``(token, jti, expires_at)``. The ``jti`` is registered in the
+    ``sessions`` table by the caller so logout/logout-all can revoke it —
+    a bare JWT signature proves authenticity but not that the session is
+    still live.
+    """
     now = _dt.datetime.now(_dt.timezone.utc)
     ttl_days = settings.jwt_ttl_days if remember else settings.jwt_ttl_days_short
+    expires_at = now + _dt.timedelta(days=ttl_days)
+    jti = uuid.uuid4().hex
     payload = {
         "sub": user["username"],
         "full_name": user.get("full_name", ""),
@@ -26,9 +35,11 @@ def create_access_token(user: dict, remember: bool = True) -> str:
         "email": user.get("email", ""),
         "lang": user.get("lang", "tr"),
         "iat": now,
-        "exp": now + _dt.timedelta(days=ttl_days),
+        "exp": expires_at,
+        "jti": jti,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return token, jti, expires_at
 
 
 def decode_token(token: str) -> dict | None:

@@ -11,6 +11,7 @@ import io
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from api.concurrency import heavy_slot
 from api.deps import require
 from data.repositories import app_settings as app_cfg
 from data.repositories import vehicle_costs as costs_repo
@@ -82,7 +83,8 @@ def _report(slug: str):
 
 
 @router.get("/{slug}.csv")
-def report_csv(slug: str, user: dict = Depends(require("view_finance"))) -> Response:
+def report_csv(slug: str, user: dict = Depends(require("view_finance")),
+               _slot: dict = Depends(heavy_slot)) -> Response:
     if slug not in _SLUGS:
         raise HTTPException(404, detail="not_found")
     title, headers, rows, total = _report(slug)
@@ -101,7 +103,8 @@ def report_csv(slug: str, user: dict = Depends(require("view_finance"))) -> Resp
 
 
 @router.get("/{slug}.pdf")
-def report_pdf(slug: str, user: dict = Depends(require("view_finance"))) -> Response:
+def report_pdf(slug: str, user: dict = Depends(require("view_finance")),
+               _slot: dict = Depends(heavy_slot)) -> Response:
     if slug not in _SLUGS:
         raise HTTPException(404, detail="not_found")
     title, headers, rows, total = _report(slug)

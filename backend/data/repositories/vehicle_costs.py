@@ -14,7 +14,7 @@ data/repositories/vehicles.py. Every read here therefore filters
 """
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 COST_TYPES = ["insurance", "maintenance", "depreciation", "fuel",
               "financing", "registration", "other"]
@@ -42,7 +42,7 @@ def list_costs(limit: int = 200) -> list[dict]:
              WHERE {_LIVE}
              ORDER BY c.period_date DESC, c.cost_id DESC
              LIMIT :lim"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"lim": limit}).mappings().all()]
 
 
@@ -53,12 +53,12 @@ def list_deleted_costs() -> list[dict]:
              LEFT JOIN vehicles v ON v.vehicle_id = c.vehicle_id
              WHERE c.deleted_at IS NOT NULL
              ORDER BY c.deleted_at DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
 def get_cost(cost_id: int) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT * FROM vehicle_costs WHERE cost_id = :c"), {"c": cost_id}
         ).mappings().first()
@@ -95,7 +95,7 @@ def restore_cost(cost_id: int) -> None:
 
 
 def cost_total() -> int:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(
             text("SELECT COALESCE(SUM(amount), 0) FROM vehicle_costs WHERE deleted_at IS NULL")
         ).scalar_one()
@@ -105,7 +105,7 @@ def cost_by_type() -> list[dict]:
     sql = """SELECT type, COALESCE(SUM(amount), 0) AS amount
              FROM vehicle_costs WHERE deleted_at IS NULL
              GROUP BY type ORDER BY amount DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -114,7 +114,7 @@ def cost_by_month() -> list[dict]:
                     COALESCE(SUM(amount), 0) AS cost
              FROM vehicle_costs WHERE deleted_at IS NULL
              GROUP BY month ORDER BY month"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -123,7 +123,7 @@ def cost_by_year() -> list[dict]:
                     COALESCE(SUM(amount), 0) AS cost
              FROM vehicle_costs WHERE deleted_at IS NULL
              GROUP BY year ORDER BY year"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -133,7 +133,7 @@ def cost_by_type_for_month(month: str) -> list[dict]:
              FROM vehicle_costs
              WHERE deleted_at IS NULL AND strftime('%Y-%m', period_date) = :m
              GROUP BY type ORDER BY amount DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"m": month}).mappings().all()]
 
 
@@ -144,5 +144,5 @@ def cost_by_vehicle() -> list[dict]:
              LEFT JOIN vehicles v ON v.vehicle_id = c.vehicle_id
              WHERE c.deleted_at IS NULL
              GROUP BY c.vehicle_id, v.make_model"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]

@@ -18,7 +18,7 @@ revenue immediately, exactly as a hard delete used to.
 """
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 COMPENSATION_TYPES = ["damage", "mechanic_fee", "traffic_fine",
                        "cleaning_fee", "fuel_shortage", "lost_item", "other"]
@@ -45,7 +45,7 @@ def list_compensations(limit: int = 200) -> list[dict]:
              WHERE c.type IN ({types}) AND c.deleted_at IS NULL
              ORDER BY c.occurred_at DESC, c.charge_id DESC
              LIMIT :lim"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"lim": limit}).mappings().all()]
 
 
@@ -58,14 +58,14 @@ def list_deleted_compensations() -> list[dict]:
              LEFT JOIN vehicles v ON v.vehicle_id = c.vehicle_id
              WHERE c.type IN ({types}) AND c.deleted_at IS NOT NULL
              ORDER BY c.deleted_at DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
 def get_compensation(charge_id: int) -> dict | None:
     types = ",".join(f"'{t}'" for t in COMPENSATION_TYPES)
     sql = f"SELECT * FROM charges WHERE charge_id = :c AND type IN ({types})"
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(text(sql), {"c": charge_id}).mappings().first()
     return dict(row) if row else None
 
@@ -106,7 +106,7 @@ def restore_compensation(charge_id: int) -> None:
 
 def compensation_total() -> int:
     types = ",".join(f"'{t}'" for t in COMPENSATION_TYPES)
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return conn.execute(text(
             f"SELECT COALESCE(SUM(amount), 0) FROM charges "
             f"WHERE type IN ({types}) AND deleted_at IS NULL"
@@ -118,5 +118,5 @@ def compensation_by_type() -> list[dict]:
     sql = f"""SELECT type, COALESCE(SUM(amount), 0) AS amount
              FROM charges WHERE type IN ({types}) AND deleted_at IS NULL
              GROUP BY type ORDER BY amount DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]

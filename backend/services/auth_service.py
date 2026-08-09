@@ -37,8 +37,7 @@ MIN_PASSWORD_LEN = settings.password_min_length
 REMEMBER_DAYS = 30
 SESSION_HOURS = 12
 
-DEFAULT_ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = "admin"   # change immediately in Settings
+BOOTSTRAP_COMPLETED_KEY = "bootstrap_completed"
 
 # Rejected outright regardless of length rules — these are the first guesses any
 # credential-stuffing list makes.
@@ -115,9 +114,13 @@ def _parse_dt(value) -> datetime | None:
         return None
 
 
-def lockout_remaining(username: str) -> int:
-    """Seconds left on an account's lockout, 0 when not locked."""
-    row = users_repo.get_login_attempt((username or "").strip())
+def lockout_remaining(username: str, ip: str) -> int:
+    """Seconds left on this (username, ip) pair's lockout, 0 when not locked.
+
+    Keyed on the pair, not the username alone — a lock on username-only would
+    let anyone lock out a real account with 5 requests from any IP. This way an
+    attacker can only ever lock out their own IP's attempts against that name."""
+    row = users_repo.get_login_attempt_ip((username or "").strip(), ip or "")
     if not row or not row.get("locked_until"):
         return 0
     until = _parse_dt(row["locked_until"])
@@ -127,32 +130,105 @@ def lockout_remaining(username: str) -> int:
     return int(remaining) if remaining > 0 else 0
 
 
-def register_login_failure(username: str) -> int:
-    """Count a failed attempt and lock the account once the threshold is hit.
-    Returns the seconds of lockout now in force (0 if still under the threshold)."""
+def global_login_delay_seconds(username: str) -> float:
+    """Friction (never a lock) once a username's total failures across ALL IPs
+    pile up — makes a distributed low-and-slow guess spread across many source
+    IPs to dodge the per-pair lock cost real time, without giving anyone a way
+    to deny a genuine user access."""
+    row = users_repo.get_login_attempt((username or "").strip())
+    fails = (row or {}).get("fails", 0)
+    return settings.global_login_delay_seconds if fails >= settings.global_login_failures_threshold else 0.0
+
+
+def _backoff_minutes(fails: int) -> int:
+    if fails < settings.max_login_failures:
+        return 0
+    minutes = settings.lockout_minutes * (2 ** (fails - settings.max_login_failures))
+    return min(minutes, settings.lockout_max_minutes)
+
+
+def register_login_failure(username: str, ip: str) -> int:
+    """Count a failed attempt against the (username, ip) pair, with exponential
+    backoff once the threshold is hit, and bump the global per-username counter
+    used only for friction (see global_login_delay_seconds). Returns the seconds
+    of lockout now in force for this pair (0 if still under the threshold)."""
     username = (username or "").strip()
-    row = users_repo.get_login_attempt(username)
+    ip = ip or ""
+    users_repo.purge_stale_login_attempts_ip()
+    row = users_repo.get_login_attempt_ip(username, ip)
     fails = (row or {}).get("fails", 0) + 1
-    locked_until = None
-    if fails >= settings.max_login_failures:
-        locked_until = datetime.now() + timedelta(minutes=settings.lockout_minutes)
-    users_repo.record_login_failure(username, locked_until)
-    return int(settings.lockout_minutes * 60) if locked_until else 0
+    minutes = _backoff_minutes(fails)
+    locked_until = datetime.now() + timedelta(minutes=minutes) if minutes else None
+    users_repo.record_login_failure_ip(username, ip, locked_until)
+    users_repo.record_login_failure(username, None)  # global counter, delay-only
+
+    return int(minutes * 60) if locked_until else 0
 
 
-def clear_login_failures(username: str) -> None:
-    users_repo.clear_login_failures((username or "").strip())
+def clear_login_failures(username: str, ip: str = "") -> None:
+    username = (username or "").strip()
+    if ip:
+        users_repo.clear_login_failures_ip(username, ip)
+    users_repo.clear_login_failures(username)
 
 
 # ---- First-run seeding ------------------------------------------------------
-def ensure_default_admin():
-    if users_repo.count_users() == 0:
-        users_repo.insert_user(
-            DEFAULT_ADMIN_USERNAME,
-            hash_password(DEFAULT_ADMIN_PASSWORD),
-            full_name="System Administrator",
-            role="super_admin",
+def ensure_bootstrap_admin():
+    """Seed exactly one super_admin the first time this database is ever booted,
+    then never again.
+
+    Replaces the old ``admin``/``admin`` constant, which any public deployment
+    left unrotated is a walk-in super_admin account (§8.2 C3). The
+    ``bootstrap_completed`` marker in app_settings — not "does a user exist" —
+    is the source of truth: without it, wiping the users table (accident or
+    attack) would silently recreate a default admin on the next boot.
+    """
+    from data.repositories import app_settings as app_settings_repo
+
+    if app_settings_repo.get_setting(BOOTSTRAP_COMPLETED_KEY):
+        return
+
+    if users_repo.count_users() > 0:
+        # Pre-existing install from before this marker existed: real accounts
+        # are already here, so just record that bootstrap has happened.
+        app_settings_repo.set_setting(BOOTSTRAP_COMPLETED_KEY, "1")
+        return
+
+    username = (settings.bootstrap_admin_user or "").strip()
+    password = settings.bootstrap_admin_password or ""
+
+    if settings.cookie_secure and (not username or not password):
+        raise RuntimeError(
+            "BOOTSTRAP_ADMIN_USER / BOOTSTRAP_ADMIN_PASSWORD are unset while "
+            "COOKIE_SECURE=true. Refusing to start: a production instance must "
+            "not boot with no way to log in, and it must never fall back to a "
+            "default admin/admin account. Set both env vars and restart."
         )
+
+    if username and password:
+        ok, why = validate_password(password, username)
+        if not ok:
+            raise RuntimeError(f"BOOTSTRAP_ADMIN_PASSWORD fails policy: {why}")
+    else:
+        # Dev/local convenience: no constant, no silent admin/admin — a random
+        # password logged once so the box is usable without a manual insert.
+        username = username or "admin"
+        password = _gen_password()
+        from api.monitoring import get_logger
+
+        get_logger("boot").warning(
+            "Bootstrap super_admin created: username=%r password=%r "
+            "(dev-only; set BOOTSTRAP_ADMIN_USER/PASSWORD to pin these)",
+            username, password,
+        )
+
+    users_repo.insert_user(
+        username,
+        hash_password(password),
+        full_name="System Administrator",
+        role="super_admin",
+    )
+    app_settings_repo.set_setting(BOOTSTRAP_COMPLETED_KEY, "1")
 
 
 # ---- Login ------------------------------------------------------------------

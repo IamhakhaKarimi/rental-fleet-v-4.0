@@ -8,7 +8,7 @@ so the UI can show income, cost, and net profit by month, by year, and by
 vehicle — all in INTEGER cents.
 """
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read
 from data.repositories import vehicle_costs as costs_repo
 from data.repositories import compensations as comp_repo
 
@@ -28,7 +28,7 @@ def revenue_summary() -> dict:
         COALESCE(SUM(CASE WHEN type='overdue_penalty' THEN amount END),0) AS penalty,
         COALESCE(SUM(CASE WHEN type IN {_COMPENSATION_TYPES_SQL} THEN amount END),0) AS compensation
     FROM charges WHERE deleted_at IS NULL"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(text(sql)).mappings().first()
     r, p, c = row["rental"], row["penalty"], row["compensation"]
     return {"rental": r, "penalty": p, "damage": c, "total": r + p + c}
@@ -44,7 +44,7 @@ def revenue_by_vehicle() -> list[dict]:
              GROUP BY c.vehicle_id,v.make_model
              HAVING revenue>0
              ORDER BY revenue DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -69,7 +69,7 @@ def revenue_by_customer() -> list[dict]:
              GROUP BY cu.customer_id, cu.full_name, cu.phone
              HAVING revenue > 0
              ORDER BY revenue DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -81,7 +81,7 @@ def revenue_by_type_for_month(month: str) -> list[dict]:
                 AND deleted_at IS NULL
                 AND strftime('%Y-%m', occurred_at) = :m
               GROUP BY type ORDER BY amount DESC"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"m": month}).mappings().all()]
 
 
@@ -104,7 +104,7 @@ def revenue_by_month() -> list[dict]:
              FROM charges
              WHERE deleted_at IS NULL
              GROUP BY month ORDER BY month"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 
@@ -115,7 +115,7 @@ def revenue_by_year() -> list[dict]:
              FROM charges
              WHERE deleted_at IS NULL
              GROUP BY year ORDER BY year"""
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 
 

@@ -4,17 +4,17 @@ Records each license purchase (licensee, the year it covers, how many years,
 the amount paid in cents, the purchase date and any notes). Returns plain dicts.
 """
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 
 
 def list_licenses() -> list[dict]:
     sql = "SELECT * FROM licenses ORDER BY year DESC, license_id DESC"
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
 
 
 def get_license(license_id: int) -> dict | None:
-    with get_engine().connect() as conn:
+    with db_read() as conn:
         row = conn.execute(
             text("SELECT * FROM licenses WHERE license_id = :id"),
             {"id": license_id},

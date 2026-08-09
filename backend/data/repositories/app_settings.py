@@ -7,7 +7,7 @@ even before anything has been saved.
 """
 
 from sqlalchemy import text
-from core.db import get_engine
+from core.db import db_read, get_engine
 from config.settings import APP_NAME
 
 BUSINESS_NAME_KEY = "business_name"
@@ -24,7 +24,7 @@ PAY_QR_KEY = "pay_qr_enabled"
 
 def get_setting(key: str, default: str = "") -> str:
     try:
-        with get_engine().connect() as conn:
+        with db_read() as conn:
             val = conn.execute(
                 text("SELECT value FROM app_settings WHERE key = :k"), {"k": key}
             ).scalar()

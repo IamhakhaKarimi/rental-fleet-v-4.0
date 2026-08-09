@@ -289,6 +289,9 @@ def _migrate_add_columns():
     Additive column migrations for older databases (preserves all data):
       - vehicles.photo : optional base64 car photo
       - users.lang     : the user's preferred UI language
+      - charges.deleted_at / vehicle_costs.deleted_at : soft-delete timestamp so a
+        deleted cost or compensation entry can be restored from Settings -> Activity
+        (see api/routers/activity.py return/cost, return/compensation).
     """
     plan = {
         "vehicles": {"photo": "TEXT NOT NULL DEFAULT ''"},
@@ -297,7 +300,8 @@ def _migrate_add_columns():
                   # non-constant DEFAULT in ADD COLUMN. Empty = never changed.
                   "password_changed_at": "TEXT NOT NULL DEFAULT ''"},
         "rentals": {"invoice_lang": "TEXT NOT NULL DEFAULT 'tr'"},
-        "charges": {"note": "TEXT NOT NULL DEFAULT ''"},
+        "charges": {"note": "TEXT NOT NULL DEFAULT ''", "deleted_at": "TEXT"},
+        "vehicle_costs": {"deleted_at": "TEXT"},
     }
     for table, cols in plan.items():
         existing = _table_columns(table)
@@ -336,6 +340,7 @@ def _migrate_charges_types():
             return  # table doesn't exist yet, or already migrated
         cols = [r[1] for r in conn.execute(text("PRAGMA table_info(charges)")).all()]
         note_expr = "note" if "note" in cols else "''"
+        deleted_at_expr = "deleted_at" if "deleted_at" in cols else "NULL"
         conn.execute(text("ALTER TABLE charges RENAME TO charges_old"))
         conn.execute(text(f"""
             CREATE TABLE charges (
@@ -345,12 +350,13 @@ def _migrate_charges_types():
                 type        TEXT NOT NULL CHECK (type IN ({new_check})),
                 amount      INTEGER NOT NULL,
                 occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
-                note        TEXT NOT NULL DEFAULT ''
+                note        TEXT NOT NULL DEFAULT '',
+                deleted_at  TEXT
             )
         """))
         conn.execute(text(f"""
-            INSERT INTO charges (charge_id, deal_id, vehicle_id, type, amount, occurred_at, note)
-            SELECT charge_id, deal_id, vehicle_id, type, amount, occurred_at, {note_expr}
+            INSERT INTO charges (charge_id, deal_id, vehicle_id, type, amount, occurred_at, note, deleted_at)
+            SELECT charge_id, deal_id, vehicle_id, type, amount, occurred_at, {note_expr}, {deleted_at_expr}
             FROM charges_old
         """))
         conn.execute(text("DROP TABLE charges_old"))

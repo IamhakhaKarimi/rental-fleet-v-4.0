@@ -27,7 +27,7 @@ def revenue_summary() -> dict:
         COALESCE(SUM(CASE WHEN type='rental'          THEN amount END),0) AS rental,
         COALESCE(SUM(CASE WHEN type='overdue_penalty' THEN amount END),0) AS penalty,
         COALESCE(SUM(CASE WHEN type IN {_COMPENSATION_TYPES_SQL} THEN amount END),0) AS compensation
-    FROM charges"""
+    FROM charges WHERE deleted_at IS NULL"""
     with get_engine().connect() as conn:
         row = conn.execute(text(sql)).mappings().first()
     r, p, c = row["rental"], row["penalty"], row["compensation"]
@@ -40,6 +40,7 @@ def revenue_by_vehicle() -> list[dict]:
                                  THEN c.amount END),0) AS revenue
              FROM charges c
              LEFT JOIN vehicles v ON v.vehicle_id=c.vehicle_id
+             WHERE c.deleted_at IS NULL
              GROUP BY c.vehicle_id,v.make_model
              HAVING revenue>0
              ORDER BY revenue DESC"""
@@ -64,6 +65,7 @@ def revenue_by_customer() -> list[dict]:
              FROM charges c
              JOIN rentals   r  ON r.deal_id     = c.deal_id
              JOIN customers cu ON cu.customer_id = r.customer_id
+             WHERE c.deleted_at IS NULL
              GROUP BY cu.customer_id, cu.full_name, cu.phone
              HAVING revenue > 0
              ORDER BY revenue DESC"""
@@ -76,6 +78,7 @@ def revenue_by_type_for_month(month: str) -> list[dict]:
     sql = f"""SELECT type, COALESCE(SUM(amount),0) AS amount
               FROM charges
               WHERE type IN {_REVENUE_TYPES}
+                AND deleted_at IS NULL
                 AND strftime('%Y-%m', occurred_at) = :m
               GROUP BY type ORDER BY amount DESC"""
     with get_engine().connect() as conn:
@@ -99,6 +102,7 @@ def revenue_by_month() -> list[dict]:
                     SUM(CASE WHEN type IN {_REVENUE_TYPES}
                              THEN amount ELSE 0 END) AS revenue
              FROM charges
+             WHERE deleted_at IS NULL
              GROUP BY month ORDER BY month"""
     with get_engine().connect() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
@@ -109,6 +113,7 @@ def revenue_by_year() -> list[dict]:
                     SUM(CASE WHEN type IN {_REVENUE_TYPES}
                              THEN amount ELSE 0 END) AS revenue
              FROM charges
+             WHERE deleted_at IS NULL
              GROUP BY year ORDER BY year"""
     with get_engine().connect() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]

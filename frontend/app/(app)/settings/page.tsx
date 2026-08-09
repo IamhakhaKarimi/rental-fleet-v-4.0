@@ -1603,7 +1603,8 @@ interface ActivityRow {
 }
 
 interface ReturnableItem {
-  kind: "vehicle" | "rental";
+  kind: "vehicle" | "rental" | "cost" | "compensation";
+  entity: string;
   entity_id: string;
   label: string;
 }
@@ -1676,10 +1677,12 @@ function ActivityTab() {
     loadReturnable();
   }, [loadActivity, loadReturnable]);
 
-  // entity_id → kind, for matching activity rows against undoable items.
+  // "entity:entity_id" → kind, for matching activity rows against undoable
+  // items. Keyed on the pair (not entity_id alone) because vehicle_cost.cost_id
+  // and charge.charge_id are both plain autoincrement ints and can collide.
   const returnableByEntity = useMemo(() => {
     const m = new Map<string, ReturnableItem["kind"]>();
-    for (const it of returnable) m.set(it.entity_id, it.kind);
+    for (const it of returnable) m.set(`${it.entity}:${it.entity_id}`, it.kind);
     return m;
   }, [returnable]);
 
@@ -1762,7 +1765,7 @@ function ActivityTab() {
           </thead>
           <tbody>
             {filtered.map((r) => {
-              const kind = r.entity_id ? returnableByEntity.get(r.entity_id) : undefined;
+              const kind = r.entity_id ? returnableByEntity.get(`${r.entity}:${r.entity_id}`) : undefined;
               const rental = r.entity === "rental" ? rentalInfo.get(r.entity_id) : undefined;
               const vehicleName = r.entity === "vehicle" ? vehicleTags.get(r.entity_id) : undefined;
               const customerName = r.entity === "customer" ? customerNames.get(r.entity_id) : undefined;

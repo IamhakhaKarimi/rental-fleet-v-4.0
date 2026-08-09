@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { api, apiDel, apiGet, apiPost } from "@/lib/api";
+import { api, apiDel, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -120,6 +120,39 @@ const IncomeSharePieChart = dynamic(
 const cents = (euros: number) => euros / 100;
 
 type TabKey = "overview" | "monthly" | "yearly" | "vehicle" | "customer" | "costs" | "compensation";
+
+// Mirrors the validation in backend/api/routers/finance.py (_clean_ledger_fields)
+// so a bad entry is caught before the round-trip, with a message specific to
+// what's actually wrong rather than a generic "could not save".
+const LEDGER_AMOUNT_MAX = 1_000_000;
+const LEDGER_NOTE_MAX = 300;
+
+const LEDGER_ERROR_FALLBACKS: Record<string, string> = {
+  fields_required: "All fields are required.",
+  invalid_vehicle: "Selected vehicle no longer exists.",
+  invalid_type: "Select a valid type.",
+  invalid_date: "Enter a valid date.",
+  invalid_amount: "Enter a valid amount.",
+  amount_too_large: `Amount can't exceed ${LEDGER_AMOUNT_MAX.toLocaleString()} €.`,
+  note_too_long: `Note can't exceed ${LEDGER_NOTE_MAX} characters.`,
+  invalid_deal_id: "Invalid rental ID format.",
+};
+
+function ledgerErrorMessage(e: any, tx: (k: string, f: string) => string, fallback: string): string {
+  const key = e?.key as string | undefined;
+  return tx(key || "error", (key && LEDGER_ERROR_FALLBACKS[key]) || fallback);
+}
+
+/** Client-side mirror of the same bounds — returns an i18n-fallback-style error
+ *  key/message pair, or null when the entry is valid. Cheap enough to run on
+ *  every submit; the server still re-validates everything independently. */
+function validateLedgerEntry(vehicleId: string, amount: number, note: string): string | null {
+  if (!vehicleId) return "fields_required";
+  if (!(amount > 0) || !Number.isFinite(amount)) return "invalid_amount";
+  if (amount > LEDGER_AMOUNT_MAX) return "amount_too_large";
+  if (note.length > LEDGER_NOTE_MAX) return "note_too_long";
+  return null;
+}
 
 export default function FinancePage() {
   const { t, lang } = useI18n();
@@ -936,27 +969,53 @@ function CostsTab({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   // Default the vehicle select once the active list arrives.
   useEffect(() => {
     if (!vehicleId && vehicles.length) setVehicleId(vehicles[0].vehicle_id);
   }, [vehicles, vehicleId]);
 
+  function edit(c: CostRow) {
+    setEditingId(c.cost_id);
+    setVehicleId(c.vehicle_id);
+    setCostType(c.type);
+    setAmount(c.amount / 100);
+    setDate(c.period_date);
+    setNote(c.note || "");
+    setErr("");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setAmount(0);
+    setNote("");
+    setErr("");
+  }
+
   async function submit() {
-    if (!vehicleId || !(amount > 0)) {
-      setErr(tx("fields_required", "All fields are required."));
+    const noteTrimmed = note.trim();
+    const invalid = validateLedgerEntry(vehicleId, amount, noteTrimmed);
+    if (invalid) {
+      setErr(tx(invalid, LEDGER_ERROR_FALLBACKS[invalid] || tx("fields_required", "All fields are required.")));
       return;
     }
     setBusy(true);
     setErr("");
     try {
-      await apiPost("/api/finance/costs", {
+      const body = {
         vehicle_id: vehicleId,
         cost_type: costType,
         amount_euros: amount,
         period_date: date,
-        note,
-      });
+        note: noteTrimmed,
+      };
+      if (editingId != null) {
+        await apiPut(`/api/finance/costs/${editingId}`, body);
+        setEditingId(null);
+      } else {
+        await apiPost("/api/finance/costs", body);
+      }
       setAmount(0);
       setNote("");
       onChanged();
@@ -964,7 +1023,7 @@ function CostsTab({
       setErr(
         isLicenseError(e)
           ? licenseMessage((k) => tx(k, k), license)
-          : tx(e?.key || "error", "Could not save cost.")
+          : ledgerErrorMessage(e, tx, "Could not save cost.")
       );
     } finally {
       setBusy(false);
@@ -975,6 +1034,7 @@ function CostsTab({
     if (!confirm(`${tx("delete_btn", "Delete")}? ${costLabel(c.type)} · ${formatEur(c.amount)}`)) return;
     try {
       await apiDel(`/api/finance/costs/${c.cost_id}`);
+      if (editingId === c.cost_id) cancelEdit();
       onChanged();
     } catch (e: any) {
       toast.error(tx(e?.key || "error", "Could not delete."));
@@ -983,10 +1043,34 @@ function CostsTab({
 
   return (
     <div className="space-y-4">
-      {/* Add cost form */}
-      <div className="card p-5 space-y-3">
+      {/* Add cost form — gets an accent ring + tint while editing an existing
+          row, so it's visually obvious where the in-progress edit lives. */}
+      <div
+        className="card p-5 space-y-3 transition-colors duration-200"
+        style={
+          editingId != null
+            ? {
+                borderColor: "var(--accent)",
+                boxShadow: "0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent)",
+                background: "color-mix(in oklab, var(--accent) 5%, var(--surface))",
+              }
+            : undefined
+        }
+      >
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-base font-semibold">{tx("add_cost_section", "Add Vehicle Cost")}</h2>
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            {editingId != null
+              ? tx("edit_cost_section", "Edit Vehicle Cost")
+              : tx("add_cost_section", "Add Vehicle Cost")}
+            {editingId != null && (
+              <span
+                className="text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                style={{ background: "var(--accent)", color: "var(--bg)" }}
+              >
+                {tx("editing_badge", "Editing")}
+              </span>
+            )}
+          </h2>
           {reportButtons}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1016,6 +1100,7 @@ function CostsTab({
             <input
               type="number"
               min={0}
+              max={LEDGER_AMOUNT_MAX}
               step="0.01"
               value={amount}
               onChange={(e) => setAmount(+e.target.value)}
@@ -1027,14 +1112,21 @@ function CostsTab({
           </label>
           <label className="text-xs text-muted sm:col-span-2">
             {tx("cost_note", "Note")}
-            <input value={note} onChange={(e) => setNote(e.target.value)} />
+            <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={LEDGER_NOTE_MAX} />
           </label>
         </div>
         {err && <div className="text-sm text-danger">{err}</div>}
-        <button className="btn btn-primary" onClick={submit} disabled={busy}>
-          <span className="msr text-[18px]">add</span>
-          {busy ? "…" : tx("add_cost_btn", "Add Cost")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn btn-primary" onClick={submit} disabled={busy}>
+            <span className="msr text-[18px]">{editingId != null ? "save" : "add"}</span>
+            {busy ? "…" : editingId != null ? tx("save_btn", "Save") : tx("add_cost_btn", "Add Cost")}
+          </button>
+          {editingId != null && (
+            <button className="btn" onClick={cancelEdit} disabled={busy}>
+              {tx("cancel_btn", "Cancel")}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Recent costs */}
@@ -1066,9 +1158,22 @@ function CostsTab({
                   {formatEur(c.amount)}
                 </Td>
                 <Td right>
-                  <button className="btn btn-danger !py-1.5 !px-2.5 text-xs" onClick={() => del(c)}>
-                    <span className="msr text-[16px]">delete</span>
-                  </button>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      className="btn btn-primary !py-1.5 !px-2.5 text-xs"
+                      onClick={() => edit(c)}
+                      title={tx("edit_btn", "Edit")}
+                    >
+                      <span className="msr text-[16px]">edit</span>
+                    </button>
+                    <button
+                      className="btn btn-danger !py-1.5 !px-2.5 text-xs"
+                      onClick={() => del(c)}
+                      title={tx("delete_btn", "Delete")}
+                    >
+                      <span className="msr text-[16px]">delete</span>
+                    </button>
+                  </div>
                 </Td>
               </tr>
             ))}
@@ -1110,26 +1215,52 @@ function CompensationTab({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!vehicleId && vehicles.length) setVehicleId(vehicles[0].vehicle_id);
   }, [vehicles, vehicleId]);
 
+  function edit(c: CompensationRow) {
+    setEditingId(c.charge_id);
+    setVehicleId(c.vehicle_id);
+    setCompType(c.type);
+    setAmount(c.amount / 100);
+    setDate(c.period_date);
+    setNote(c.note || "");
+    setErr("");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setAmount(0);
+    setNote("");
+    setErr("");
+  }
+
   async function submit() {
-    if (!vehicleId || !(amount > 0)) {
-      setErr(tx("fields_required", "All fields are required."));
+    const noteTrimmed = note.trim();
+    const invalid = validateLedgerEntry(vehicleId, amount, noteTrimmed);
+    if (invalid) {
+      setErr(tx(invalid, LEDGER_ERROR_FALLBACKS[invalid] || tx("fields_required", "All fields are required.")));
       return;
     }
     setBusy(true);
     setErr("");
     try {
-      await apiPost("/api/finance/compensations", {
+      const body = {
         vehicle_id: vehicleId,
         comp_type: compType,
         amount_euros: amount,
         period_date: date,
-        note,
-      });
+        note: noteTrimmed,
+      };
+      if (editingId != null) {
+        await apiPut(`/api/finance/compensations/${editingId}`, body);
+        setEditingId(null);
+      } else {
+        await apiPost("/api/finance/compensations", body);
+      }
       setAmount(0);
       setNote("");
       onChanged();
@@ -1137,7 +1268,7 @@ function CompensationTab({
       setErr(
         isLicenseError(e)
           ? licenseMessage((k) => tx(k, k), license)
-          : tx(e?.key || "error", "Could not save compensation.")
+          : ledgerErrorMessage(e, tx, "Could not save compensation.")
       );
     } finally {
       setBusy(false);
@@ -1148,6 +1279,7 @@ function CompensationTab({
     if (!confirm(`${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${formatEur(c.amount)}`)) return;
     try {
       await apiDel(`/api/finance/compensations/${c.charge_id}`);
+      if (editingId === c.charge_id) cancelEdit();
       onChanged();
     } catch (e: any) {
       toast.error(tx(e?.key || "error", "Could not delete."));
@@ -1156,9 +1288,33 @@ function CompensationTab({
 
   return (
     <div className="space-y-4">
-      {/* Add compensation form */}
-      <div className="card p-5 space-y-3">
-        <h2 className="text-base font-semibold">{tx("add_compensation_section", "Add Damage Compensation")}</h2>
+      {/* Add compensation form — same accent ring + tint while editing as
+          CostsTab, so it's visually obvious where the in-progress edit lives. */}
+      <div
+        className="card p-5 space-y-3 transition-colors duration-200"
+        style={
+          editingId != null
+            ? {
+                borderColor: "var(--accent)",
+                boxShadow: "0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent)",
+                background: "color-mix(in oklab, var(--accent) 5%, var(--surface))",
+              }
+            : undefined
+        }
+      >
+        <h2 className="text-base font-semibold flex items-center gap-2">
+          {editingId != null
+            ? tx("edit_compensation_section", "Edit Damage Compensation")
+            : tx("add_compensation_section", "Add Damage Compensation")}
+          {editingId != null && (
+            <span
+              className="text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+              style={{ background: "var(--accent)", color: "var(--bg)" }}
+            >
+              {tx("editing_badge", "Editing")}
+            </span>
+          )}
+        </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <label className="text-xs text-muted">
             {tx("col_car", "Vehicle")}
@@ -1186,6 +1342,7 @@ function CompensationTab({
             <input
               type="number"
               min={0}
+              max={LEDGER_AMOUNT_MAX}
               step="0.01"
               value={amount}
               onChange={(e) => setAmount(+e.target.value)}
@@ -1197,14 +1354,25 @@ function CompensationTab({
           </label>
           <label className="text-xs text-muted sm:col-span-2">
             {tx("cost_note", "Note")}
-            <input value={note} onChange={(e) => setNote(e.target.value)} />
+            <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={LEDGER_NOTE_MAX} />
           </label>
         </div>
         {err && <div className="text-sm text-danger">{err}</div>}
-        <button className="btn btn-primary" onClick={submit} disabled={busy}>
-          <span className="msr text-[18px]">add</span>
-          {busy ? "…" : tx("add_compensation_btn", "Add Compensation")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn btn-primary" onClick={submit} disabled={busy}>
+            <span className="msr text-[18px]">{editingId != null ? "save" : "add"}</span>
+            {busy
+              ? "…"
+              : editingId != null
+              ? tx("save_btn", "Save")
+              : tx("add_compensation_btn", "Add Compensation")}
+          </button>
+          {editingId != null && (
+            <button className="btn" onClick={cancelEdit} disabled={busy}>
+              {tx("cancel_btn", "Cancel")}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Recent compensation entries */}
@@ -1236,9 +1404,22 @@ function CompensationTab({
                   {formatEur(c.amount)}
                 </Td>
                 <Td right>
-                  <button className="btn btn-danger !py-1.5 !px-2.5 text-xs" onClick={() => del(c)}>
-                    <span className="msr text-[16px]">delete</span>
-                  </button>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      className="btn btn-primary !py-1.5 !px-2.5 text-xs"
+                      onClick={() => edit(c)}
+                      title={tx("edit_btn", "Edit")}
+                    >
+                      <span className="msr text-[16px]">edit</span>
+                    </button>
+                    <button
+                      className="btn btn-danger !py-1.5 !px-2.5 text-xs"
+                      onClick={() => del(c)}
+                      title={tx("delete_btn", "Delete")}
+                    >
+                      <span className="msr text-[16px]">delete</span>
+                    </button>
+                  </div>
                 </Td>
               </tr>
             ))}

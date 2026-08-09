@@ -974,7 +974,7 @@ input:focus, select:focus, textarea:focus {
 
 .inv-prev-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   margin: 9px 0;
 }

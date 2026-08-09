@@ -257,7 +257,7 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
                    color:#1A1C1E; letter-spacing:.03em; }}
   .meta {{ font-size:11px; color:#475569; margin-top:4px; line-height:1.5; }}
   .meta b {{ color:#211C17; }}
-  .cols {{ display:flex; gap:22px; margin-bottom:12px; }}
+  .cols {{ display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }}
   .cols .box {{ flex:1; }}
   .lbl {{ font-size:9px; font-weight:600; letter-spacing:.07em; text-transform:uppercase;
           color:#736B60; margin-bottom:3px; }}

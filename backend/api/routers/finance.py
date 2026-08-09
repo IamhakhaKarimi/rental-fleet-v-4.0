@@ -8,18 +8,70 @@ finance reset is super-admin only and wipes both ledgers via admin_ops.
 """
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from api.deps import require, require_level
 from data.repositories import admin_ops, vehicle_costs as costs_repo, compensations as comp_repo
+from data.repositories import vehicles as vehicles_repo
 from services import audit_service, finance_service, licensing_service
 
 router = APIRouter(prefix="/api/finance", tags=["finance"])
 
+# ── Ledger-entry validation ──────────────────────────────────────────────────
+# Every field the Costs/Compensation forms submit is checked here before it
+# ever reaches a SQL statement. Queries are parameterized (SQLAlchemy `text()`
+# bound params) everywhere in this codebase, so string concatenation-style SQL
+# injection is not reachable through these fields regardless — this layer's
+# job is data QUALITY: reject the wrong shape of data outright instead of
+# silently coercing it (e.g. an unknown cost_type used to fall back to
+# "other", which let junk into the ledger unnoticed).
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DEAL_ID_RE = re.compile(r"^RENT-\d{6}-\d{3}$")
+_NOTE_MAX_LEN = 300
+_AMOUNT_MAX_EUROS = 1_000_000
 
-def _euros_to_cents(euros: float) -> int:
-    return int(round(float(euros or 0) * 100))
+
+def _clean_ledger_fields(vehicle_id: str, entry_type: str, allowed_types: list[str],
+                         amount_euros: float, period_date: str, note: str) -> tuple[str, int, str]:
+    """Shared validation for the cost + compensation add/update bodies.
+
+    Returns (vehicle_id, amount_cents, note) once every field checks out, or
+    raises HTTPException(400, detail=<i18n key>) on the first violation —
+    matching this router's existing "fields_required" convention so the
+    frontend's `tx(e?.key, fallback)` idiom keeps working unchanged.
+    """
+    vehicle_id = (vehicle_id or "").strip().upper()
+    if not vehicle_id or len(vehicle_id) > 20:
+        raise HTTPException(400, detail="fields_required")
+    if not vehicles_repo.get_vehicle(vehicle_id):
+        raise HTTPException(400, detail="invalid_vehicle")
+
+    if entry_type not in allowed_types:
+        raise HTTPException(400, detail="invalid_type")
+
+    if not _DATE_RE.match((period_date or "").strip()):
+        raise HTTPException(400, detail="invalid_date")
+
+    try:
+        amount = float(amount_euros)
+    except (TypeError, ValueError):
+        raise HTTPException(400, detail="invalid_amount")
+    if amount != amount or amount in (float("inf"), float("-inf")):  # NaN / inf
+        raise HTTPException(400, detail="invalid_amount")
+    cents = int(round(amount * 100))
+    if cents <= 0:
+        raise HTTPException(400, detail="fields_required")
+    if cents > _AMOUNT_MAX_EUROS * 100:
+        raise HTTPException(400, detail="amount_too_large")
+
+    note = (note or "").strip()
+    if len(note) > _NOTE_MAX_LEN:
+        raise HTTPException(400, detail="note_too_long")
+
+    return vehicle_id, cents, note
 
 
 class CostIn(BaseModel):
@@ -102,14 +154,23 @@ def cost_total(user: dict = Depends(require("view_finance"))) -> dict:
 
 @router.post("/costs", status_code=201)
 def add_cost(body: CostIn, user: dict = Depends(require("view_finance"))) -> dict:
-    if _euros_to_cents(body.amount_euros) <= 0:
-        raise HTTPException(400, detail="fields_required")
+    vehicle_id, cents, note = _clean_ledger_fields(
+        body.vehicle_id, body.cost_type, costs_repo.COST_TYPES,
+        body.amount_euros, body.period_date, body.note)
     licensing_service.assert_allowed(body.period_date, field="period_date")
-    cost_type = body.cost_type if body.cost_type in costs_repo.COST_TYPES else "other"
-    costs_repo.add_cost(body.vehicle_id, cost_type,
-                        _euros_to_cents(body.amount_euros),
-                        body.period_date, body.note.strip())
-    audit_service.record(user, "add_cost", "vehicle", body.vehicle_id, cost_type)
+    costs_repo.add_cost(vehicle_id, body.cost_type, cents, body.period_date, note)
+    audit_service.record(user, "add_cost", "vehicle", vehicle_id, body.cost_type)
+    return {"ok": True}
+
+
+@router.put("/costs/{cost_id}")
+def update_cost(cost_id: int, body: CostIn, user: dict = Depends(require("view_finance"))) -> dict:
+    vehicle_id, cents, note = _clean_ledger_fields(
+        body.vehicle_id, body.cost_type, costs_repo.COST_TYPES,
+        body.amount_euros, body.period_date, body.note)
+    licensing_service.assert_allowed(body.period_date, field="period_date")
+    costs_repo.update_cost(cost_id, vehicle_id, body.cost_type, cents, body.period_date, note)
+    audit_service.record(user, "update_cost", "vehicle_cost", str(cost_id), body.cost_type)
     return {"ok": True}
 
 
@@ -133,14 +194,30 @@ def compensation_total(user: dict = Depends(require("view_finance"))) -> dict:
 
 @router.post("/compensations", status_code=201)
 def add_compensation(body: CompensationIn, user: dict = Depends(require("view_finance"))) -> dict:
-    if _euros_to_cents(body.amount_euros) <= 0:
-        raise HTTPException(400, detail="fields_required")
+    vehicle_id, cents, note = _clean_ledger_fields(
+        body.vehicle_id, body.comp_type, comp_repo.COMPENSATION_TYPES,
+        body.amount_euros, body.period_date, body.note)
+    deal_id = body.deal_id.strip().upper() or None
+    if deal_id and not _DEAL_ID_RE.match(deal_id):
+        raise HTTPException(400, detail="invalid_deal_id")
     licensing_service.assert_allowed(body.period_date, field="period_date")
-    comp_type = body.comp_type if body.comp_type in comp_repo.COMPENSATION_TYPES else "other"
-    comp_repo.add_compensation(body.vehicle_id, comp_type,
-                               _euros_to_cents(body.amount_euros),
-                               body.period_date, body.note.strip(), body.deal_id.strip() or None)
-    audit_service.record(user, "add_compensation", "vehicle", body.vehicle_id, comp_type)
+    comp_repo.add_compensation(vehicle_id, body.comp_type, cents, body.period_date, note, deal_id)
+    audit_service.record(user, "add_compensation", "vehicle", vehicle_id, body.comp_type)
+    return {"ok": True}
+
+
+@router.put("/compensations/{charge_id}")
+def update_compensation(charge_id: int, body: CompensationIn, user: dict = Depends(require("view_finance"))) -> dict:
+    vehicle_id, cents, note = _clean_ledger_fields(
+        body.vehicle_id, body.comp_type, comp_repo.COMPENSATION_TYPES,
+        body.amount_euros, body.period_date, body.note)
+    deal_id = body.deal_id.strip().upper() or None
+    if deal_id and not _DEAL_ID_RE.match(deal_id):
+        raise HTTPException(400, detail="invalid_deal_id")
+    licensing_service.assert_allowed(body.period_date, field="period_date")
+    comp_repo.update_compensation(charge_id, vehicle_id, body.comp_type, cents,
+                                  body.period_date, note, deal_id)
+    audit_service.record(user, "update_compensation", "charge", str(charge_id), body.comp_type)
     return {"ok": True}
 
 

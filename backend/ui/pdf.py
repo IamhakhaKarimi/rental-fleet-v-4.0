@@ -228,39 +228,39 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
         pdf.line(L, y, R, y)
         y += 5
 
-        # ── bill-to / vehicle ────────────────────────────────────────────────
+        # ── bill-to / vehicle (stacked — easier to fit on thermal-printer rolls) ──
         pdf.set_xy(L, y)
         pdf.set_font(F, "B", 8)
         pdf.set_text_color(*_MUTED)
-        pdf.cell(90, 5, text=T("bill_to").upper(), new_x=XPos.RIGHT, new_y=YPos.TOP)
-        pdf.cell(85, 5, text=T("invoice_vehicle").upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, text=T("bill_to").upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-        row_y = pdf.get_y()
-        pdf.set_xy(L, row_y)
+        pdf.set_x(L)
         pdf.set_font(F, "B", 10)
         pdf.set_text_color(*_TEXT)
-        pdf.cell(90, 5, text=_txt(deal.get("client_name", "")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, text=_txt(deal.get("client_name", "")), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_x(L)
         pdf.set_font(F, "", 9)
         pdf.set_text_color(*_MUTED)
-        pdf.cell(90, 5, text=f'{T("col_phone")}: {deal.get("phone", "") or "—"}',
+        pdf.cell(0, 5, text=f'{T("col_phone")}: {deal.get("phone", "") or "—"}'
+                 f'   {T("col_idno")}: {deal.get("id_passport", "") or "—"}',
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+        pdf.ln(2)
         pdf.set_x(L)
-        pdf.cell(90, 5, text=f'{T("col_idno")}: {deal.get("id_passport", "") or "—"}',
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font(F, "B", 8)
+        pdf.set_text_color(*_MUTED)
+        pdf.cell(0, 5, text=T("invoice_vehicle").upper(), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         veh_line = f'{deal.get("vehicle_id", "")}  {deal.get("make_model", "")}'
-        pdf.set_xy(right_x - 10, row_y)
+        pdf.set_x(L)
         pdf.set_font(F, "B", 10)
         pdf.set_text_color(*_TEXT)
-        pdf.cell(R - (right_x - 10), 5, text=veh_line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_x(right_x - 10)
+        pdf.cell(0, 5, text=veh_line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_x(L)
         pdf.set_font(F, "", 9)
         pdf.set_text_color(*_MUTED)
-        pdf.cell(R - (right_x - 10), 5, text=_txt(deal.get("license_plate", "") or "—"),
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_x(right_x - 10)
-        pdf.cell(R - (right_x - 10), 5, text=f'{T("invoice_period")}: {start} -> {end}',
+        pdf.cell(0, 5, text=f'{_txt(deal.get("license_plate", "") or "—")}'
+                 f'   {T("invoice_period")}: {start} -> {end}',
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         y = pdf.get_y() + 4

@@ -77,7 +77,7 @@ def get_rental_full(deal_id: str) -> dict | None:
 
 def list_charges_for_deal(deal_id: str) -> list[dict]:
     sql = """SELECT type, amount, occurred_at FROM charges
-             WHERE deal_id = :d ORDER BY occurred_at, charge_id"""
+             WHERE deal_id = :d AND deleted_at IS NULL ORDER BY occurred_at, charge_id"""
     with get_engine().connect() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"d": deal_id}).mappings().all()]
 

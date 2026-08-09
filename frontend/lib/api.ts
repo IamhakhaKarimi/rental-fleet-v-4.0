@@ -140,6 +140,22 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
   return (ct.includes("application/json") ? res.json() : res.text()) as Promise<T>;
 }
 
+/**
+ * Paginated GET (M5). `path` must already carry `page`/`page_size` — this
+ * just also reads back the pre-slice `X-Total-Count` header a paginated list
+ * endpoint sets, so a table view can build page controls without the body
+ * shape changing (every existing `apiGet<T[]>()` caller of the same endpoint
+ * is unaffected — `page_size=0`/omitted stays the old unbounded behaviour).
+ */
+export async function apiGetPaged<T = any>(path: string): Promise<{ items: T[]; total: number }> {
+  const res = await api<Response>(path, { raw: true });
+  if (!res.ok) throw new ApiError(res.status, `http_${res.status}`);
+  const items = (await res.json()) as T[];
+  const header = res.headers.get("x-total-count");
+  const total = header ? parseInt(header, 10) : items.length;
+  return { items, total: Number.isFinite(total) ? total : items.length };
+}
+
 export const apiGet = <T = any>(p: string) => api<T>(p);
 export const apiPost = <T = any>(p: string, body?: unknown) => api<T>(p, { method: "POST", body });
 export const apiPut = <T = any>(p: string, body?: unknown) => api<T>(p, { method: "PUT", body });

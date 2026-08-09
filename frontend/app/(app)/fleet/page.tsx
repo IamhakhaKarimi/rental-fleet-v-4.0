@@ -16,6 +16,8 @@ import { SwipeDeck, SwipePanel } from "@/components/SwipeCard";
 import { VehicleCard, AvailabilityChip } from "@/components/VehicleCard";
 import { VehicleThumb } from "@/components/VehicleThumb";
 import { useVehicleThumbs } from "@/lib/useVehicleThumbs";
+import { usePagedTable } from "@/lib/usePagedTable";
+import { Pagination } from "@/components/Pagination";
 import type { Vehicle } from "@/lib/types";
 
 type V = Vehicle & { locked?: boolean };
@@ -246,9 +248,15 @@ export default function FleetPage() {
   const [removing, setRemoving] = useState<V | null>(null);
   const [view, changeView] = useResponsiveView("fleet_view");
   const thumbs = useVehicleThumbs(vehicles.map((v) => v.vehicle_id));
+  // Server-paginated table (M5) — deliberately separate from `vehicles` above,
+  // which stays the full filtered list the card/carousel view needs. Only
+  // fetches while the table is actually visible.
+  const [tableRefresh, setTableRefresh] = useState(0);
+  const paged = usePagedTable<V>(`/api/vehicles?q=${encodeURIComponent(q)}`, 25, view === "table", tableRefresh);
 
   const load = useCallback(async () => {
     await apiGet<V[]>(`/api/vehicles?q=${encodeURIComponent(q)}`).then(setVehicles).catch(() => {});
+    setTableRefresh((n) => n + 1);
   }, [q]);
 
   const { isLoading, refetch } = usePolling(load, { interval: 15000 });
@@ -545,7 +553,7 @@ export default function FleetPage() {
               </tr>
             </thead>
             <tbody>
-              {vehicles.map((v) => (
+              {paged.rows.map((v) => (
                 <tr key={v.vehicle_id} className="border-b border-line last:border-0 align-top">
                   <td className="p-2.5">
                     <span className="font-medium text-ink">{v.make_model}</span>
@@ -573,7 +581,7 @@ export default function FleetPage() {
                   )}
                 </tr>
               ))}
-              {vehicles.length === 0 && (
+              {paged.rows.length === 0 && (
                 <tr>
                   <td colSpan={8} className="p-4 text-sm text-muted text-center">
                     {t("no_cars")}
@@ -582,6 +590,13 @@ export default function FleetPage() {
               )}
             </tbody>
           </table>
+          <Pagination
+            page={paged.page}
+            pageCount={paged.pageCount}
+            total={paged.total}
+            onChange={paged.setPage}
+            label={t("col_count") === "col_count" ? "vehicles" : t("col_count")}
+          />
         </div>
       )}
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status as http
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status as http
 from pydantic import BaseModel
 
 from api.deps import get_current_user, require, require_level
@@ -52,14 +52,28 @@ class StatusIn(BaseModel):
 
 # ── Reads ───────────────────────────────────────────────────────────────────
 @router.get("")
-def list_vehicles(q: str = "", include_deleted: bool = False,
+def list_vehicles(response: Response, q: str = "", include_deleted: bool = False,
+                  page: int = Query(1, ge=1), page_size: int = Query(0, ge=0),
                   user: dict = Depends(require("view_fleet"))) -> list[dict]:
+    """`page_size=0` (the default) returns everything, exactly as before this
+    endpoint gained pagination — every existing caller (the card/carousel
+    views, the `active`/`counts` shortcuts, mobile clients) is unaffected.
+    `page_size>0` slices the list and reports the pre-slice count via
+    `X-Total-Count` so a table view can build page controls (M5). The slice
+    happens in Python, after the search filter below, because that filter
+    already forces a full fetch — this bounds the RESPONSE, which is what
+    was actually measured as unbounded, not the DB read (see DOCUMENTATION.md
+    §8.2 M5 for why query cost itself wasn't the target here)."""
     rows = vrepo.list_vehicles(include_deleted=include_deleted)
     if q.strip():
         rows = [v for v in rows if _matches(v, q.strip())]
     # cheap per-row lock flag so the UI can disable status controls
     for v in rows:
         v["locked"] = rrepo.vehicle_has_active_rental(v["vehicle_id"])
+    response.headers["X-Total-Count"] = str(len(rows))
+    if page_size > 0:
+        start = (page - 1) * page_size
+        rows = rows[start:start + page_size]
     return rows
 
 

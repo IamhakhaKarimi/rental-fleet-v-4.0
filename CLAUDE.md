@@ -163,7 +163,7 @@ Roles: `visitor(0)` < `employer(1)` < `admin(2)` < `super_admin(3)`
 
 ## Security & Runtime Hardening
 
-> **Status: Phases 0–4 and 6 shipped; Phase 5 partial (M3, M6 done; M5 deferred).**
+> **Status: Phases 0–4, 5, and 6 all shipped.**
 > Live now: the L1–L3 rate limiter (`api/middleware.py`), L4 concurrency semaphores
 > (`api/concurrency.py`), bounded uploads (`api/uploads.py`), request timing
 > (`api/monitoring.py`), security headers, the JWT boot guard, `jti`-based session
@@ -171,16 +171,14 @@ Roles: `visitor(0)` < `employer(1)` < `admin(2)` < `super_admin(3)`
 > `admin`/`admin`), `(username, ip)`-keyed login lockout with exponential backoff,
 > the `HttpOnly`-cookie + CSRF Origin check, request-scoped read connections
 > (`core/db.py#db_read()` + `RequestScopedDBMiddleware`, M3), batched fleet
-> thumbnails (M6), a real `db.sqlite_busy` counter for the §8.8 migration trigger,
-> and the full Nginx/systemd single-VPS deployment config (Phase 6, see
-> "Deployment Targets" below). Verified by measurement — DOCUMENTATION.md §8.11.
+> thumbnails (M6), server-side pagination on the Fleet/Customers table views
+> (M5), a real `db.sqlite_busy` counter for the §8.8 migration trigger, and the
+> full Nginx/systemd single-VPS deployment config (Phase 6, see "Deployment
+> Targets" below). Verified by measurement — DOCUMENTATION.md §8.11.
 >
-> **Still outstanding:** the pytest suite scoped to Phase 4 auth behaviour, and
-> M5 pagination on list endpoints — deferred deliberately (see §8.2 M5): the
-> repo functions that matter most (vehicles/customers/rentals) feed pages with
-> no paging UI today, so a backend-only stub would add surface area without
-> real benefit; needs a frontend paging design first. Full audit and phased
-> plan: **DOCUMENTATION.md → §8**.
+> **Still outstanding:** the pytest suite scoped to Phase 4 auth behaviour
+> (`httpx` is not installed in this environment). Full audit and phased plan:
+> **DOCUMENTATION.md → §8**.
 
 The target deployment is a **single VPS + Nginx, same-origin** (frontend at `/`,
 API proxied at `/api`), uvicorn single process, SQLite on local disk.

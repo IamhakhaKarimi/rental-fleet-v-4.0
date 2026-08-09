@@ -14,6 +14,8 @@ import { RefreshIcon } from "@/components/RefreshIcon";
 import { ViewToggle } from "@/components/ViewToggle";
 import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
 import { CustomerReportModal, useMonthLabel } from "@/components/CustomerReportModal";
+import { usePagedTable } from "@/lib/usePagedTable";
+import { Pagination } from "@/components/Pagination";
 import type { LanguagesInfo } from "@/lib/types";
 
 // English fallback when a key isn't in the dictionary.
@@ -811,6 +813,13 @@ export default function CustomersPage() {
   const [csvReport, setCsvReport] = useState(false);
   const [pdfReport, setPdfReport] = useState(false);
   const [view, changeView] = useResponsiveView("customers_view");
+  // Server-paginated table (M5) — separate from `rows` above, which stays the
+  // full filtered list the card view, quick-find dropdown and inactive list
+  // need. Only fetches while the table is actually visible.
+  const [tableRefresh, setTableRefresh] = useState(0);
+  const paged = usePagedTable<CustomerRow>(
+    `/api/customers?q=${encodeURIComponent(q)}`, 25, view === "table", tableRefresh
+  );
 
   // Quick-find dropdown (independent search box + selected customer id).
   const [pick, setPick] = useState("");
@@ -823,6 +832,7 @@ export default function CustomersPage() {
     await apiGet<CustomerRow[]>(`/api/customers?q=${encodeURIComponent(q)}`)
       .then(setRows)
       .catch(() => {});
+    setTableRefresh((n) => n + 1);
   }, [q]);
 
   const { isLoading, refetch } = usePolling(load, { interval: 15000 });
@@ -1030,7 +1040,7 @@ export default function CustomersPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((c) => (
+              {paged.rows.map((c) => (
                 <tr key={c.customer_id} className="border-b border-line last:border-0">
                   <td className="p-2.5">
                     <span className="font-medium text-ink">{c.full_name}</span>
@@ -1068,7 +1078,7 @@ export default function CustomersPage() {
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {paged.rows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="p-4 text-sm text-muted text-center">
                     {f(t, "no_customers", "No customers found.")}
@@ -1077,6 +1087,13 @@ export default function CustomersPage() {
               )}
             </tbody>
           </table>
+          <Pagination
+            page={paged.page}
+            pageCount={paged.pageCount}
+            total={paged.total}
+            onChange={paged.setPage}
+            label={f(t, "customers", "customers")}
+          />
         </div>
       )}
 

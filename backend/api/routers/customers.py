@@ -9,7 +9,7 @@ mutation re-checks permissions server-side and audits.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from api.deps import require, require_level
@@ -45,11 +45,19 @@ class DeleteIn(BaseModel):
 
 # ── Reads ───────────────────────────────────────────────────────────────────
 @router.get("/customers")
-def list_customers(q: str = "",
+def list_customers(response: Response, q: str = "",
+                   page: int = Query(1, ge=1), page_size: int = Query(0, ge=0),
                    user: dict = Depends(require("view_management"))) -> list[dict]:
+    """See vehicles.py's `list_vehicles` for the pagination contract:
+    `page_size=0` (default) is unchanged, unbounded behaviour; `page_size>0`
+    slices post-filter and reports the true count via `X-Total-Count` (M5)."""
     rows = crepo.list_customers_enriched()
     if q.strip():
         rows = [c for c in rows if _matches(c, q.strip())]
+    response.headers["X-Total-Count"] = str(len(rows))
+    if page_size > 0:
+        start = (page - 1) * page_size
+        rows = rows[start:start + page_size]
     return rows
 
 

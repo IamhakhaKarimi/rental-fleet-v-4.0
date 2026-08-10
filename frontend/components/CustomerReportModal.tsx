@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
+import { useIsTabletUp } from "@/lib/useMediaQuery";
 import { Modal } from "./Modal";
 
 const f = (t: (k: string) => string, key: string, fb: string) => (t(key) === key ? fb : t(key));
@@ -70,6 +71,7 @@ export function CustomerReportModal({
   const { t, lang } = useI18n();
   const toast = useToast();
   const monthLabel = useMonthLabel(lang, t);
+  const isTabletUp = useIsTabletUp();
 
   const [rentals, setRentals] = useState<ReportRentalLite[]>([]);
   const [columns, setColumns] = useState<ReportColumn[]>([]);
@@ -209,8 +211,11 @@ export function CustomerReportModal({
               </button>
             </div>
             <div
-              className="grid grid-cols-2 sm:grid-cols-3 gap-x-2 max-h-[24vh] overflow-y-auto pr-1"
-              style={{ gridAutoFlow: "column", gridTemplateRows: `repeat(${colRows}, auto)` }}
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-2 max-h-[24vh] overflow-y-auto pr-1"
+              style={{
+                gridAutoFlow: isTabletUp ? "column" : "row",
+                gridTemplateRows: isTabletUp ? `repeat(${colRows}, auto)` : undefined,
+              }}
             >
               {orderedColumns.map((c) => (
                 <label key={c.key} className={checkRow}>
@@ -254,7 +259,13 @@ export function CustomerReportModal({
             {monthGroups.length === 0 ? (
               <div className="text-sm text-muted">{f(t, "no_rentals", "No rentals yet.")}</div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-2 max-h-[24vh] overflow-y-auto pr-1">
+              <div
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-2 max-h-[24vh] overflow-y-auto pr-1"
+                style={{
+                  gridAutoFlow: isTabletUp ? "column" : "row",
+                  gridTemplateRows: isTabletUp ? `repeat(${colRows}, auto)` : undefined,
+                }}
+              >
                 {monthGroups.map(([ym, count]) => (
                   <label key={ym} className={checkRow}>
                     <input

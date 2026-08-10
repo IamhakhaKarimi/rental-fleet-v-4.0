@@ -220,6 +220,7 @@ def reset_request_stats(user: dict = Depends(require_level(3))) -> JSONResponse:
 from api.routers import activity as activity_router  # noqa: E402
 from api.routers import admin_panel as admin_panel_router  # noqa: E402
 from api.routers import auth as auth_router  # noqa: E402
+from api.routers import contact as contact_router  # noqa: E402
 from api.routers import customer_reports as customer_reports_router  # noqa: E402
 from api.routers import customers as customers_router  # noqa: E402
 from api.routers import finance as finance_router  # noqa: E402
@@ -239,6 +240,7 @@ from api.routers import vehicles as vehicles_router  # noqa: E402
 app.include_router(auth_router.router)
 app.include_router(meta_router.router)
 app.include_router(i18n_router.router)
+app.include_router(contact_router.router)
 app.include_router(vehicles_router.router)
 app.include_router(rentals_router.router)
 app.include_router(notifications_router.router)

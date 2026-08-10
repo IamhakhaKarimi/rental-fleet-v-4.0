@@ -5,6 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { usePolling } from "@/lib/usePolling";
+import { usePagedTable } from "@/lib/usePagedTable";
+import { Pagination } from "@/components/Pagination";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { Modal } from "@/components/Modal";
@@ -41,8 +43,16 @@ export default function ReservationsPage() {
   const [manage, setManage] = useState<ActiveRental | null>(null);
   const [edit, setEdit] = useState<ActiveRental | null>(null);
 
+  // Server-paginated table (M5, matching Fleet/Customers) — separate from
+  // `rentals` above, which stays the full list the card view/timeline need.
+  const [tableRefresh, setTableRefresh] = useState(0);
+  const paged = usePagedTable<ActiveRental>(
+    `/api/rentals/active?q=${encodeURIComponent(query)}`, 25, view === "table", tableRefresh
+  );
+
   const load = useCallback(async () => {
     await apiGet<ActiveRental[]>("/api/rentals/active").then(setRentals).catch(() => {});
+    setTableRefresh((n) => n + 1);
   }, []);
 
   const { isLoading, refetch } = usePolling(load, { interval: 15000 });
@@ -173,7 +183,7 @@ export default function ReservationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r) => (
+                {paged.rows.map((r) => (
                   <tr key={r.deal_id} className="border-b border-line last:border-0">
                     <td className="p-2.5">
                       <span className="font-medium text-ink">{r.client_name}</span>
@@ -214,7 +224,7 @@ export default function ReservationsPage() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && (
+                {paged.rows.length === 0 && (
                   <tr>
                     <td colSpan={8} className="p-4 text-sm text-muted text-center">
                       {rentals.length === 0
@@ -225,6 +235,13 @@ export default function ReservationsPage() {
                 )}
               </tbody>
             </table>
+            <Pagination
+              page={paged.page}
+              pageCount={paged.pageCount}
+              total={paged.total}
+              onChange={paged.setPage}
+              label={tf("active_rentals", "active rentals")}
+            />
           </div>
         )}
       </section>

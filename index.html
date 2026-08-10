@@ -221,19 +221,19 @@
       <button class="btn ghost" id="fwbtn" type="button">Allow through Windows Firewall</button>
     </div>
 
-    <a class="btn" id="open" href="http://localhost:3000" target="_blank" rel="noopener">
+    <a class="btn" id="open" href="http://127.0.0.1:3000" target="_blank" rel="noopener">
       Open Fleet Console →
     </a>
     <div class="links">
-      <a class="btn ghost" id="docs" href="http://localhost:8001/docs" target="_blank" rel="noopener">API Docs</a>
-      <a class="btn ghost" id="health" href="http://localhost:8001/api/health" target="_blank" rel="noopener">API Health</a>
+      <a class="btn ghost" id="docs" href="http://127.0.0.1:8001/docs" target="_blank" rel="noopener">API Docs</a>
+      <a class="btn ghost" id="health" href="http://127.0.0.1:8001/api/health" target="_blank" rel="noopener">API Health</a>
     </div>
     <div class="links" id="controls" hidden>
       <button class="btn ghost" id="stop" type="button">Stop servers</button>
       <button class="btn ghost" id="rebuild" type="button">Rebuild web app</button>
     </div>
 
-    <div class="hint">Default login: <b>admin</b> / <b>admin</b> — change it in Settings → Profile.</div>
+    <div class="hint" id="hint">Check the API Health link → if it fails, restart from the "Start the servers by hand" section below.</div>
 
     <details id="logwrap" hidden>
       <summary>Server log</summary>
@@ -340,11 +340,19 @@ npm run dev</pre>
     if(working){ var sp = document.createElement("span"); sp.className = "spin"; ph.appendChild(sp); }
     ph.appendChild(document.createTextNode(msg));
 
-    // status rows
+    // status rows — update URLs based on actual mode
     if(working && !s.api_up) setDot("api", false, "starting…"); else setDot("api", s.api_up);
     if(working && !s.web_up) setDot("web", false, "starting…"); else setDot("web", s.web_up);
-    $("url-web").textContent = "localhost:3000";
-    $("url-api").textContent = "localhost:8001";
+
+    // Show the actual URLs the app is using
+    var webHost = (running && s.mode === "lan" && s.lan_ip) ? s.lan_ip : "127.0.0.1";
+    var webUrl = "http://" + webHost + ":3000";
+    var apiUrl = "http://" + webHost + ":8001";
+    $("url-web").textContent = webHost + ":3000";
+    $("url-api").textContent = webHost + ":8001";
+    $("open").href = webUrl;
+    $("docs").href = apiUrl + "/docs";
+    $("health").href = apiUrl + "/api/health";
 
     // share block
     var lan = s.urls && s.urls.lan_web;

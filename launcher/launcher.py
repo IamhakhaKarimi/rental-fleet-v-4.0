@@ -384,6 +384,7 @@ class Launcher:
 
     def _wait_ready(self) -> bool:
         deadline = time.time() + READY_TIMEOUT
+        api_healthy = False
         while time.time() < deadline:
             if not self.api.running():
                 self.message = "The API process exited on startup."
@@ -391,8 +392,21 @@ class Launcher:
             if not self.web.running():
                 self.message = "The web process exited on startup."
                 return False
-            if port_open("127.0.0.1", API_PORT) and port_open("127.0.0.1", WEB_PORT):
+
+            # Check if API is actually responding (not just listening on port)
+            if not api_healthy:
+                try:
+                    import urllib.request
+                    response = urllib.request.urlopen("http://127.0.0.1:8001/api/health", timeout=1)
+                    if response.status == 200:
+                        api_healthy = True
+                except Exception:
+                    pass
+
+            # Both ports open AND API is healthy
+            if api_healthy and port_open("127.0.0.1", WEB_PORT):
                 return True
+
             time.sleep(0.5)
         return False
 

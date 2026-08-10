@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from api.deps import require, require_level
@@ -93,10 +93,30 @@ class DeleteIn(BaseModel):
     confirm: bool = False
 
 
+_SEARCH_FIELDS = ("client_name", "phone", "id_passport", "make_model", "license_plate", "deal_id")
+
+
+def _matches(r: dict, q: str) -> bool:
+    ql = q.lower()
+    return any(ql in str(r.get(k, "") or "").lower() for k in _SEARCH_FIELDS)
+
+
 # ── Reads ───────────────────────────────────────────────────────────────────
 @router.get("/active")
-def active(user: dict = Depends(require("view_management"))) -> list[dict]:
-    return rrepo.list_active_rentals_with_vehicle()
+def active(response: Response, q: str = "",
+          page: int = Query(1, ge=1), page_size: int = Query(0, ge=0),
+          user: dict = Depends(require("view_management"))) -> list[dict]:
+    """See customers.py's `list_customers` for the pagination contract:
+    `page_size=0` (default) is unchanged, unbounded behaviour; `page_size>0`
+    slices post-filter and reports the true count via `X-Total-Count` (M5)."""
+    rows = rrepo.list_active_rentals_with_vehicle()
+    if q.strip():
+        rows = [r for r in rows if _matches(r, q.strip())]
+    response.headers["X-Total-Count"] = str(len(rows))
+    if page_size > 0:
+        start = (page - 1) * page_size
+        rows = rows[start:start + page_size]
+    return rows
 
 
 @router.get("/all")

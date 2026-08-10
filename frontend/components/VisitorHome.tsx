@@ -4,7 +4,6 @@ import { apiGet } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { formatEur } from "@/lib/money";
 import { NightModeToggle } from "@/components/NightModeToggle";
-import { ContactForm } from "@/components/ContactForm";
 import type { FleetCounts, Vehicle } from "@/lib/types";
 
 interface Brand {
@@ -76,7 +75,7 @@ export function VisitorHome() {
   );
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-5">
       <div className="flex justify-end">
         <NightModeToggle />
       </div>
@@ -144,10 +143,6 @@ export function VisitorHome() {
             {f(t, "no_cars", "No cars available right now.")}
           </div>
         )}
-      </div>
-
-      <div className="py-8 px-4 md:px-6">
-        <ContactForm />
       </div>
     </div>
   );

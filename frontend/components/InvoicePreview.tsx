@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
-import { formatEur } from "@/lib/money";
+import { formatMoneyDisplay } from "@/lib/money";
+import { useCurrency } from "@/lib/currency";
 import { formatDisplay } from "@/lib/dates";
 import type { BusinessInfo } from "@/lib/types";
 
@@ -67,6 +68,8 @@ export interface InvoicePreviewData {
 
 export function InvoicePreview({ data }: { data: InvoicePreviewData }) {
   const T = useInvoiceDict(data.invoiceLang || "tr");
+  const { currency, exchangeRate } = useCurrency();
+  const fmt = (cents: number) => formatMoneyDisplay(cents, currency, exchangeRate);
 
   const subtotal = Math.max(0, data.days) * Math.max(0, data.dailyRateEuros) * 100;
   const deposit = Math.max(0, data.depositEuros) * 100;
@@ -137,8 +140,8 @@ export function InvoicePreview({ data }: { data: InvoicePreviewData }) {
             <tr>
               <td>{T("invoice_line_rental", "Vehicle Rental")}</td>
               <td className="num">{data.days}</td>
-              <td className="num">{formatEur(data.dailyRateEuros * 100)}</td>
-              <td className="num">{formatEur(subtotal)}</td>
+              <td className="num">{fmt(data.dailyRateEuros * 100)}</td>
+              <td className="num">{fmt(subtotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -146,17 +149,17 @@ export function InvoicePreview({ data }: { data: InvoicePreviewData }) {
         <div className="inv-prev-totals">
           <div>
             <span>{T("invoice_subtotal", "Subtotal")}</span>
-            <span className="num">{formatEur(subtotal)}</span>
+            <span className="num">{fmt(subtotal)}</span>
           </div>
           {deposit > 0 && (
             <div>
               <span>− {T("invoice_line_deposit", "Deposit")}</span>
-              <span className="num">− {formatEur(deposit)}</span>
+              <span className="num">− {fmt(deposit)}</span>
             </div>
           )}
           <div className="grand">
             <span>{T("invoice_total", "Total")}</span>
-            <span className="num">{formatEur(balance)}</span>
+            <span className="num">{fmt(balance)}</span>
           </div>
         </div>
 

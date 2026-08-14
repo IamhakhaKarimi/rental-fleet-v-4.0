@@ -17,7 +17,7 @@ import html as _html
 from config.i18n import t, t_lang
 from config.settings import APP_TAGLINE, LANGUAGES
 from config.terms import rental_terms
-from ui.components import format_eur, fmt_date, fmt_invoice_no
+from ui.components import format_invoice_money, fmt_date, fmt_invoice_no
 from ui.pdf import build_invoice_pdf
 from ui import invoice_links
 from data.repositories import rentals as rentals_repo
@@ -72,19 +72,19 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
         ctype = c["type"]
         label = T(_LINE_LABEL.get(ctype, ctype))
         if ctype == "rental":
-            qty, unit = str(days), format_eur(daily_rate)
+            qty, unit = str(days), format_invoice_money(daily_rate)
         else:
-            qty, unit = "1", format_eur(c["amount"])
+            qty, unit = "1", format_invoice_money(c["amount"])
         line_rows.append(
             f"<tr><td>{_esc(label)}</td><td class='num'>{_esc(qty)}</td>"
             f"<td class='num'>{_esc(unit)}</td>"
-            f"<td class='num'>{format_eur(c['amount'])}</td></tr>"
+            f"<td class='num'>{format_invoice_money(c['amount'])}</td></tr>"
         )
     if not line_rows:
         line_rows.append(
             f"<tr><td>{_esc(T('invoice_line_rental'))}</td><td class='num'>{days}</td>"
-            f"<td class='num'>{format_eur(daily_rate)}</td>"
-            f"<td class='num'>{format_eur(grand_total)}</td></tr>"
+            f"<td class='num'>{format_invoice_money(daily_rate)}</td>"
+            f"<td class='num'>{format_invoice_money(grand_total)}</td></tr>"
         )
 
     start = fmt_date(deal.get("start_dt"), lang, with_time=True)
@@ -104,7 +104,7 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
     if deposit > 0:
         deposit_row = (
             f"<tr><td>− {_esc(T('invoice_line_deposit'))}</td>"
-            f"<td class='num'>− {format_eur(deposit)}</td></tr>"
+            f"<td class='num'>− {format_invoice_money(deposit)}</td></tr>"
         )
 
     terms = rental_terms(lang)
@@ -211,10 +211,10 @@ def build_invoice_html(deal: dict, charges: list[dict], business_name: str,
     </table>
 
     <div class="totals"><table>
-      <tr><td>{_esc(T('invoice_subtotal'))}</td><td class="num">{format_eur(grand_total)}</td></tr>
+      <tr><td>{_esc(T('invoice_subtotal'))}</td><td class="num">{format_invoice_money(grand_total)}</td></tr>
       {deposit_row}
       <tr class="grand"><td>{_esc(T('invoice_total'))}</td>
-          <td class="num">{format_eur(balance_due)}</td></tr>
+          <td class="num">{format_invoice_money(balance_due)}</td></tr>
     </table></div>
 
     <span class="chip">{_esc(signed_txt)}</span>

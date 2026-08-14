@@ -18,7 +18,10 @@ router = APIRouter(prefix="/api", tags=["meta"])
 
 @router.get("/business/name")
 def business_name() -> dict:
-    """Public brand header data (name, single-letter avatar initial, tagline)."""
+    """Public brand header data (name, single-letter avatar initial, tagline),
+    plus the display currency + EUR->ALL rate: this is the one business-info
+    endpoint fetched broadly (nav, branding, login) without a permission gate,
+    so it doubles as the source for currency-aware money display app-wide."""
     name = app_cfg.get_business_name()
     initial = (name.strip()[:1] or "B").upper()
     return {
@@ -26,6 +29,8 @@ def business_name() -> dict:
         "initial": initial,
         "tagline": APP_TAGLINE,
         "version": APP_VERSION,
+        "currency": app_cfg.get_currency(),
+        "exchange_rate": app_cfg.get_eur_all_rate(),
     }
 
 

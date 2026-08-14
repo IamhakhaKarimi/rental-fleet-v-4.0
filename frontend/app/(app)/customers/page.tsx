@@ -7,7 +7,8 @@ import { useToast } from "@/lib/toast";
 import { usePolling } from "@/lib/usePolling";
 import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can, roleLevel } from "@/lib/perms";
-import { formatEur } from "@/lib/money";
+import { formatMoneyDisplay } from "@/lib/money";
+import { useCurrency } from "@/lib/currency";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RefreshIcon } from "@/components/RefreshIcon";
@@ -143,6 +144,8 @@ function CustomerDialog({
   const { user } = useAuth();
   const toast = useToast();
   const { requestDelete } = useDeleteUndo();
+  const { currency, exchangeRate } = useCurrency();
+  const fmt = (cents: number) => formatMoneyDisplay(cents, currency, exchangeRate);
 
   const canEdit = can(user, "service_vehicle");
   const canReassign = can(user, "edit_business_settings") || can(user, "manage_users");
@@ -342,7 +345,7 @@ function CustomerDialog({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <StatTile icon="receipt_long" label={f(t, "rentals", "Rentals")} value={String(stats.count)} />
         <StatTile icon="vpn_key" label={f(t, "active", "Active")} value={String(stats.active)} />
-        <StatTile icon="payments" label={f(t, "total_billed", "Total billed")} value={formatEur(stats.billed)} />
+        <StatTile icon="payments" label={f(t, "total_billed", "Total billed")} value={fmt(stats.billed)} />
         <StatTile icon="event" label={f(t, "last_rental", "Last Rental")} value={fmtDate(stats.last, lang)} />
       </div>
 
@@ -409,7 +412,7 @@ function CustomerDialog({
                   </div>
                   <div className="text-right shrink-0">
                     <div className="font-display font-bold text-accent text-lg tabular-nums leading-none">
-                      {formatEur(r.total_amount)}
+                      {fmt(r.total_amount)}
                     </div>
                     <div className="mt-1.5">
                       <StatusBadge status={r.status} />
@@ -423,7 +426,7 @@ function CustomerDialog({
                   <Fact label={t("return_date")}>{fmtDate(r.end_dt, lang)}</Fact>
                   <Fact label={t("days")}>{r.rental_days}</Fact>
                   <Fact label={f(t, "rate", "Rate")}>
-                    {formatEur(r.daily_rate)}
+                    {fmt(r.daily_rate)}
                     <span className="text-muted">/{f(t, "day", "day")}</span>
                   </Fact>
                 </div>
@@ -528,7 +531,7 @@ function CustomerDialog({
                         {f(t, "new_total", "New total")} · €{editRate} × {r.rental_days}
                       </span>
                       <span className="font-display font-bold text-accent tabular-nums">
-                        {formatEur(editRate * r.rental_days * 100)}
+                        {fmt(editRate * r.rental_days * 100)}
                       </span>
                     </div>
 
@@ -835,6 +838,7 @@ export default function CustomersPage() {
   const { user } = useAuth();
   const toast = useToast();
   const { requestDelete } = useDeleteUndo();
+  const { currency, exchangeRate } = useCurrency();
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<CustomerRow | null>(null);
@@ -1044,7 +1048,7 @@ export default function CustomersPage() {
                 </SwipeField>
                 <SwipeField label={f(t, "last_rate", "Last rate")}>
                   <div className="swipe-val">
-                    {formatEur(c.last_daily_rate)}
+                    {formatMoneyDisplay(c.last_daily_rate, currency, exchangeRate)}
                     <span className="text-muted font-normal">/{f(t, "day", "day")}</span>
                   </div>
                 </SwipeField>

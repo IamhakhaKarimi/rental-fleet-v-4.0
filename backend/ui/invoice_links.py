@@ -18,18 +18,8 @@ import urllib.parse
 
 import segno
 
-from config.settings import CURRENCY_SYMBOL
 from data.repositories import app_settings as app_cfg
-
-
-def _eur(cents) -> str:
-    """Integer cents -> '€30' / '€30.50' (mirrors ui.components.format_eur, but this
-    module stays Streamlit-free)."""
-    cents = int(cents or 0)
-    whole, rem = divmod(abs(cents), 100)
-    sign = "-" if cents < 0 else ""
-    body = f"{whole:,}" if rem == 0 else f"{whole:,}.{rem:02d}"
-    return f"{sign}{CURRENCY_SYMBOL}{body}"
+from ui.components import format_invoice_money as _eur
 
 
 def qr_png_bytes(payload: str, scale: int = 4, border: int = 2) -> bytes:

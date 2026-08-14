@@ -13,6 +13,7 @@ from datetime import datetime
 
 from config.settings import CURRENCY_SYMBOL, STATUS_TOKEN, DEFAULT_LANG
 from config.i18n import t, month_name
+from data.repositories import app_settings as app_cfg
 
 
 def format_eur(cents: int) -> str:
@@ -22,6 +23,19 @@ def format_eur(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     body = f"{whole:,}" if rem == 0 else f"{whole:,}.{rem:02d}"
     return f"{sign}{CURRENCY_SYMBOL}{body}"
+
+
+def format_invoice_money(cents: int) -> str:
+    """EUR amount, with a rounded Lek equivalent appended when the business
+    display currency is set to ALL (e.g. '€30 (2,760 L)'). Storage stays EUR
+    cents everywhere; this is display-only, for the invoice/QR builders
+    (ui/invoice.py, ui/pdf.py, ui/invoice_links.py) -- NOT format_eur's other
+    callers (Finance, customer/finance reports), which stay EUR-only."""
+    eur = format_eur(cents)
+    if app_cfg.get_currency() != "ALL":
+        return eur
+    lek = round((cents or 0) / 100 * app_cfg.get_eur_all_rate())
+    return f"{eur} ({lek:,} L)"
 
 
 def fmt_date(iso, lang: str = None, with_time: bool = False) -> str:

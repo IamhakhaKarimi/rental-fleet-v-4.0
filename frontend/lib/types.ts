@@ -40,6 +40,8 @@ export interface BusinessInfo {
   initial: string;
   tagline: string;
   version: string;
+  currency: string;
+  exchange_rate: number;
 }
 
 export interface LanguagesInfo {

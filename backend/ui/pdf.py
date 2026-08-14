@@ -19,10 +19,10 @@ from fpdf.enums import XPos, YPos
 
 from config.i18n import t, t_lang
 from config.settings import (APP_NAME, APP_TAGLINE, APP_VERSION, BASE_DIR,
-                             CURRENCY_SYMBOL, LANGUAGES)
+                             LANGUAGES)
 from config.terms import rental_terms
 from services.scheduling_service import return_state
-from ui.components import fmt_date, fmt_invoice_no
+from ui.components import fmt_date, fmt_invoice_no, format_eur, format_invoice_money
 from ui import invoice_links
 
 # First existing (regular, bold) pair wins. The DejaVu pair BUNDLED with the repo
@@ -85,15 +85,6 @@ _LINE_LABEL = {
     "overdue_penalty": "late_fee",
     "damage": "damage_charge",
 }
-
-
-def _eur(cents) -> str:
-    """Integer cents -> '€30' / '€30.50' (mirrors ui.components.format_eur)."""
-    cents = int(cents or 0)
-    whole, rem = divmod(abs(cents), 100)
-    sign = "-" if cents < 0 else ""
-    body = f"{whole:,}" if rem == 0 else f"{whole:,}.{rem:02d}"
-    return f"{sign}{CURRENCY_SYMBOL}{body}"
 
 
 def _new_pdf(orientation: str = "P"):
@@ -285,7 +276,7 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
             pdf.cell(w_desc, 7, text=label, border="B")
             pdf.cell(w_qty, 7, text=qty, align="R", border="B")
             pdf.cell(w_unit, 7, text=unit, align="R", border="B")
-            pdf.cell(w_amt, 7, text=_eur(amount), align="R", border="B",
+            pdf.cell(w_amt, 7, text=format_invoice_money(amount), align="R", border="B",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         pdf.set_draw_color(*_LIGHT)
@@ -294,27 +285,31 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
                 ctype = c["type"]
                 label = T(_LINE_LABEL.get(ctype, ctype))
                 if ctype == "rental":
-                    _item(label, str(days), _eur(daily_rate), c["amount"])
+                    _item(label, str(days), format_invoice_money(daily_rate), c["amount"])
                 else:
-                    _item(label, "1", _eur(c["amount"]), c["amount"])
+                    _item(label, "1", format_invoice_money(c["amount"]), c["amount"])
         else:
-            _item(T("invoice_line_rental"), str(days), _eur(daily_rate), grand_total)
+            _item(T("invoice_line_rental"), str(days), format_invoice_money(daily_rate), grand_total)
 
         # ── totals (right aligned) ──────────────────────────────────────────────
+        # Wide enough for the dual-currency string format_invoice_money can produce
+        # when the display currency is ALL (e.g. "€1,600 (152,800 L)") at the bold
+        # 13pt grand-total size — same right edge (tot_x + tot_lbl + tot_val = 195,
+        # the page margin), just using more of the row's otherwise-blank width.
         y2 = pdf.get_y() + 3
-        tot_x = 120
-        tot_lbl, tot_val = 45, 30
+        tot_x = 85
+        tot_lbl, tot_val = 55, 55
         pdf.set_xy(tot_x, y2)
         pdf.set_font(F, "", 10)
         pdf.set_text_color(*_TEXT)
         pdf.cell(tot_lbl, 6, text=T("invoice_subtotal"))
-        pdf.cell(tot_val, 6, text=_eur(grand_total), align="R",
+        pdf.cell(tot_val, 6, text=format_invoice_money(grand_total), align="R",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         if deposit > 0:
             pdf.set_x(tot_x)
             pdf.set_text_color(*_MUTED)
             pdf.cell(tot_lbl, 6, text=f'- {T("invoice_line_deposit")}')
-            pdf.cell(tot_val, 6, text=f'- {_eur(deposit)}', align="R",
+            pdf.cell(tot_val, 6, text=f'- {format_invoice_money(deposit)}', align="R",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_x(tot_x)
         pdf.set_draw_color(*_TEXT)
@@ -325,7 +320,7 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
         pdf.set_text_color(*_TEXT)
         pdf.cell(tot_lbl, 9, text=T("invoice_total"))
         pdf.set_text_color(*_ACCENT)
-        pdf.cell(tot_val, 9, text=_eur(balance_due), align="R",
+        pdf.cell(tot_val, 9, text=format_invoice_money(balance_due), align="R",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # signed / unsigned
@@ -922,7 +917,7 @@ def build_license_invoice_pdf(d: dict) -> bytes:
     pdf.set_text_color(*_TEXT)
     pdf.cell(120, 10, text=t("invoice_total"))
     pdf.set_text_color(*_ACCENT)
-    pdf.cell(60, 10, text=_eur(int(d.get("amount_cents") or 0)), align="R",
+    pdf.cell(60, 10, text=format_eur(int(d.get("amount_cents") or 0)), align="R",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # ── signatures (licensee + authorized; seal above the authorized line) ──

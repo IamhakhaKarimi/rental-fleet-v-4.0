@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const [counts, setCounts] = useState<FleetCounts | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [bookingCar, setBookingCar] = useState<string | null>(null);
+  const [bookingStep, setBookingStep] = useState<string>("period");
   const [q, setQ] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -559,18 +560,26 @@ export default function DashboardPage() {
       {bookingCar && canBook && (
         <Modal
           title={t("quick_register")}
-          onClose={() => setBookingCar(null)}
-          size="full"
+          onClose={() => {
+            setBookingCar(null);
+            setBookingStep("period");
+          }}
+          size={bookingStep === "review" ? "full" : "compact"}
           fullHeight
-          bodyClassName="!mt-4 !mb-4 !p-4"
+          bodyClassName="!mt-[10px] !mb-[10px] !px-[50px] !py-[10px]"
         >
           <BookingDialog
             preselectVehicleId={bookingCar}
-            onClose={() => setBookingCar(null)}
+            onClose={() => {
+              setBookingCar(null);
+              setBookingStep("period");
+            }}
             onCreated={() => {
               setBookingCar(null);
+              setBookingStep("period");
               load();
             }}
+            onStepChange={setBookingStep}
           />
         </Modal>
       )}

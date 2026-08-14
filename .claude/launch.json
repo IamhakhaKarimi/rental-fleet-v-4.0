@@ -22,6 +22,14 @@
       "runtimeArgs": ["next", "dev", "-p", "3010"],
       "cwd": "frontend",
       "port": 3010
+    },
+    {
+      "//": "Third dev server slot on 3011 for when both 3000 and 3010 are held by other sessions.",
+      "name": "frontend-dev2",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "-p", "3011"],
+      "cwd": "frontend",
+      "port": 3011
     }
   ]
 }

@@ -89,10 +89,14 @@ export function BookingDialog({
   onClose,
   onCreated,
   preselectVehicleId,
+  onStepChange,
 }: {
   onClose: () => void;
   onCreated: () => void;
   preselectVehicleId?: string;
+  /** Lets the parent modal size itself per-step (the Review step needs the
+   *  wide two-column layout; the others don't). */
+  onStepChange?: (step: StepId) => void;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -122,6 +126,10 @@ export function BookingDialog({
   useEffect(() => {
     apiGet<LanguagesInfo>("/api/i18n/languages").then((d) => setLangs(d.languages)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    onStepChange?.(activeStep);
+  }, [activeStep, onStepChange]);
 
   // ── License cap ──────────────────────────────────────────────────────────
   // The return date is *derived* from `days`, so the cap has to bite on the day
@@ -243,7 +251,7 @@ export function BookingDialog({
     }
   }
 
-  const lbl = "text-[11px] font-medium text-muted block mb-1";
+  const lbl = "text-[11px] font-medium text-muted block mb-1.5";
   const groupTitle = "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted";
   // Date over time, one under the other: the day is the decision, the hour is a
   // detail of it, and stacking them says so — as well as halving the width the
@@ -261,9 +269,15 @@ export function BookingDialog({
       <StepSidebar steps={steps} activeId={activeStep} onSelect={(id) => setActiveStep(id as StepId)} />
 
         <div className="flex-1 min-w-0 flex flex-col gap-2.5">
-          <div className="min-h-0 space-y-2.5">
+          {/* `flex-1`: the panel is now a fixed, generous desktop height
+              (Modal.tsx), so a short step (Rental period, Client Information)
+              has room to spare below its fields — left as empty space rather
+              than centering the block, since a form read top-to-bottom with
+              its labels pinned under the step title reads more naturally
+              than floating in the middle of the panel. */}
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col justify-start">
         {activeStep === "period" && (
-        <div className="rounded-xl border border-line bg-[rgba(17,24,39,0.02)] p-3 space-y-2.5">
+        <div className="rounded-xl border border-line bg-[rgba(17,24,39,0.02)] p-4 space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className={groupTitle}>
               <span className="msr text-[15px]">calendar_month</span>
@@ -350,7 +364,7 @@ export function BookingDialog({
               </div>
             </div>
 
-            <div className="ml-auto max-sm:ml-0 max-sm:w-full">
+            <div className="max-sm:w-full">
               <span className={lbl}>{t("days")}</span>
               <div className={ctlRow}>
                 <div className="w-[132px] max-sm:w-full">
@@ -383,7 +397,7 @@ export function BookingDialog({
         )}
 
         {activeStep === "vehicle" && (
-          <div className="space-y-2.5 min-w-0">
+          <div className="space-y-4 min-w-0">
             <div className={groupTitle}>
               <span className="msr text-[15px]">directions_car</span>
               {tf("deal_terms", "Vehicle & pricing")}
@@ -400,7 +414,7 @@ export function BookingDialog({
                 {cars.length === 0 && <option value="">{t("no_cars")}</option>}
               </select>
             </label>
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <span className={lbl}>{t("negotiated_rate")} (€)</span>
                 <Stepper value={rate} onChange={setRate} step={5} ariaLabel={t("negotiated_rate")} />
@@ -424,7 +438,7 @@ export function BookingDialog({
         )}
 
         {activeStep === "client" && (
-          <div className="space-y-2.5 min-w-0">
+          <div className="space-y-4 min-w-0">
             <div className={groupTitle}>
               <span className="msr text-[15px]">person</span>
               {tf("client_info", "Client Information")}
@@ -458,7 +472,7 @@ export function BookingDialog({
 
         {activeStep === "review" && (
           <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,340px)] min-w-0">
-            <div className="space-y-2.5 min-w-0">
+            <div className="space-y-2 lg:space-y-1.5 min-w-0">
               <div className={groupTitle}>
                 <span className="msr text-[15px]">fact_check</span>
                 {tf("review_step", "Review")}
@@ -469,7 +483,7 @@ export function BookingDialog({
                   "Check the invoice preview below, then save the rental once every step above is checked off."
                 )}
               </p>
-              <ul className="space-y-1.5">
+              <ul className="space-y-1.5 lg:space-y-1">
                 {steps
                   .filter((s) => s.id !== "review")
                   .map((s) => (
@@ -485,7 +499,7 @@ export function BookingDialog({
               </ul>
             </div>
 
-            <div className="space-y-2 min-w-0">
+            <div className="space-y-2 lg:space-y-1.5 min-w-0">
               <div className={groupTitle}>
                 <span className="msr text-[15px]">receipt_long</span>
                 {tf("invoice_preview", "Invoice preview")}

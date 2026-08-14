@@ -13,10 +13,14 @@ const SIZE_CLASS = {
   md: "max-w-md max-lg:max-w-none",
   lg: "max-w-2xl max-lg:max-w-none",
   xl: "max-w-4xl max-lg:max-w-none",
-  // Sized to what the booking form actually needs (form column + invoice
-  // preview), not to the viewport: stretching to 96vw on a wide monitor just
-  // spread the same controls further apart.
-  full: "max-w-[min(1180px,96vw)] max-lg:max-w-none",
+  // Sized to what the booking form's Review step actually needs (168px
+  // sidebar + 200px checklist + 340px invoice preview + gaps/padding), not to
+  // the viewport — 1180px left a wide dead strip beside the invoice preview.
+  full: "max-w-[860px] max-lg:max-w-none",
+  // The booking form's single-column steps (period / vehicle / client) don't
+  // need the "full" width sized for Review's two-column layout — that just
+  // left dead whitespace beside the sidebar.
+  compact: "max-w-[560px] max-lg:max-w-none",
 } as const;
 
 export function Modal({
@@ -99,9 +103,11 @@ export function Modal({
   // No prop changed, so all ~20 call sites are untouched.
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-black/50 overflow-y-auto
+      className={`fixed inset-0 z-50 flex items-start justify-center p-4 bg-black/50 overflow-y-auto
                  max-lg:items-end max-lg:px-3 max-lg:pt-3
-                 max-lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+                 max-lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))] ${
+        fullHeight ? "lg:p-2" : ""
+      }`}
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -117,7 +123,12 @@ export function Modal({
           max-lg:rounded-2xl
           max-lg:max-h-[85dvh] max-lg:overflow-y-auto ${
           fullHeight
-            ? "max-h-[88vh] flex flex-col overflow-hidden max-lg:max-h-[85dvh]"
+            // Below `lg` this stays a max-height (shrink-to-content bottom
+            // sheet, unchanged). At `lg`+ it's a fixed height — not a cap —
+            // so the panel always claims the full desktop viewport (minus the
+            // overlay padding + panel margin above) instead of shrinking to
+            // whichever step has the least content.
+            ? "flex flex-col overflow-hidden max-lg:max-h-[85dvh] lg:h-[calc(100dvh-40px)]"
             : ""
         } ${bodyClassName}`}
         onClick={(e) => e.stopPropagation()}

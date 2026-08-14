@@ -11,6 +11,7 @@ import { licenseCapNote, refreshLicenseLimits } from "@/lib/license";
 import { Modal } from "@/components/Modal";
 import { DateField } from "@/components/DateField";
 import { AdminPanel } from "@/components/AdminPanel";
+import { useDeleteUndo } from "@/lib/deleteUndo";
 
 // English fallback when a key isn't in the dictionary.
 const f = (t: (k: string) => string, key: string, fb: string) =>
@@ -382,6 +383,7 @@ interface AssignableRole {
 function UsersTab() {
   const t = useT();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<AssignableRole[]>([]);
   const [adding, setAdding] = useState(false);
@@ -420,12 +422,30 @@ function UsersTab() {
       u.is_active ? f(t, "user_deactivated", "User deactivated.") : f(t, "user_activated", "User activated.")
     );
   }
-  async function del(u: UserRow) {
-    if (!confirm(`${f(t, "delete_btn", "Delete")}: ${u.username}?`)) return;
-    await act(
-      () => apiDel(`/api/users/${encodeURIComponent(u.username)}`),
-      f(t, "user_deleted", "User deleted.")
-    );
+  function del(u: UserRow) {
+    let idx = -1;
+    requestDelete({
+      title: f(t, "delete_btn", "Delete"),
+      message: `${f(t, "delete_btn", "Delete")}: ${u.username}?`,
+      onRemove: () =>
+        setRows((prev) => {
+          idx = prev.findIndex((r) => r.username === u.username);
+          return prev.filter((r) => r.username !== u.username);
+        }),
+      onRestore: () =>
+        setRows((prev) => {
+          if (prev.some((r) => r.username === u.username)) return prev;
+          const next = [...prev];
+          next.splice(idx < 0 ? next.length : idx, 0, u);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/users/${encodeURIComponent(u.username)}`);
+        load();
+      },
+      successMessage: f(t, "user_deleted", "User deleted."),
+      errorMessage: t("error"),
+    });
   }
   async function resetPw(u: UserRow) {
     setMsg({ ok: true, m: "" });
@@ -686,8 +706,10 @@ function ImageUploader({
 }) {
   const t = useT();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const [busy, setBusy] = useState(false);
   const [bust, setBust] = useState(Date.now());
+  const [hidden, setHidden] = useState(false);
 
   async function upload(file: File) {
     setBusy(true);
@@ -704,23 +726,30 @@ function ImageUploader({
       setBusy(false);
     }
   }
-  async function remove() {
-    setBusy(true);
-    try {
-      await apiDel(uploadPath);
-      toast.success(`${label} — ${f(t, "removed", "Removed")}`);
-      onChange();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    } finally {
-      setBusy(false);
-    }
+  function remove() {
+    requestDelete({
+      title: f(t, "remove", "Remove"),
+      message: `${label} — ${f(t, "confirm_remove_image", "Remove this image? This cannot be undone.")}`,
+      onRemove: () => setHidden(true),
+      onRestore: () => setHidden(false),
+      onCommit: async () => {
+        setBusy(true);
+        try {
+          await apiDel(uploadPath);
+          onChange();
+        } finally {
+          setBusy(false);
+        }
+      },
+      successMessage: `${label} — ${f(t, "removed", "Removed")}`,
+      errorMessage: t("error"),
+    });
   }
 
   return (
     <div className="space-y-2">
       <div className="text-xs text-muted">{label}</div>
-      {has && (
+      {has && !hidden && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`${apiBase()}${imgPath}?b=${bust}`}
@@ -744,7 +773,7 @@ function ImageUploader({
             }}
           />
         </label>
-        {has && (
+        {has && !hidden && (
           <button className="btn btn-danger !py-1.5 !px-3 text-xs" disabled={busy} onClick={remove}>
             {f(t, "remove", "Remove")}
           </button>
@@ -1097,6 +1126,7 @@ const blankLicense = {
 function LicenseTab() {
   const t = useT();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const { lang } = useI18n();
   const { user } = useAuth();
   const canGenerate = can(user, "edit_business_settings");
@@ -1200,12 +1230,30 @@ function LicenseTab() {
     }
   }
 
-  async function delLicense(r: LicenseRow) {
-    if (!confirm(`${f(t, "delete_btn", "Delete")}: ${r.licensee} (${r.year})?`)) return;
-    await run(async () => {
-      await apiDel(`/api/licenses/${r.license_id}`);
-      load();
-    }, f(t, "deleted", "Deleted"));
+  function delLicense(r: LicenseRow) {
+    let idx = -1;
+    requestDelete({
+      title: f(t, "delete_btn", "Delete"),
+      message: `${f(t, "delete_btn", "Delete")}: ${r.licensee} (${r.year})?`,
+      onRemove: () =>
+        setRows((prev) => {
+          idx = prev.findIndex((x) => x.license_id === r.license_id);
+          return prev.filter((x) => x.license_id !== r.license_id);
+        }),
+      onRestore: () =>
+        setRows((prev) => {
+          if (prev.some((x) => x.license_id === r.license_id)) return prev;
+          const next = [...prev];
+          next.splice(idx < 0 ? next.length : idx, 0, r);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/licenses/${r.license_id}`);
+        load();
+      },
+      successMessage: f(t, "deleted", "Deleted"),
+      errorMessage: t("error"),
+    });
   }
 
   return (

@@ -9,6 +9,7 @@ import { can, roleLevel } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
 import { DateField } from "@/components/DateField";
 import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
+import { useDeleteUndo } from "@/lib/deleteUndo";
 
 /* ── Response shapes (from backend/services/finance_service.py) ──────────────
    All money fields are INTEGER CENTS. */
@@ -958,6 +959,7 @@ function CostsTab({
   reportButtons: React.ReactNode;
 }) {
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const today = new Date().toISOString().slice(0, 10);
   // The ledger is capped at the licensed year server-side, so the picker is too.
   const license = useLicenseLimits();
@@ -970,6 +972,8 @@ function CostsTab({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<number>>(new Set());
+  const visibleRows = rows.filter((c) => !pendingDeleteIds.has(c.cost_id));
 
   // Default the vehicle select once the active list arrives.
   useEffect(() => {
@@ -1030,15 +1034,24 @@ function CostsTab({
     }
   }
 
-  async function del(c: CostRow) {
-    if (!confirm(`${tx("delete_btn", "Delete")}? ${costLabel(c.type)} · ${formatEur(c.amount)}`)) return;
-    try {
-      await apiDel(`/api/finance/costs/${c.cost_id}`);
-      if (editingId === c.cost_id) cancelEdit();
-      onChanged();
-    } catch (e: any) {
-      toast.error(tx(e?.key || "error", "Could not delete."));
-    }
+  function del(c: CostRow) {
+    requestDelete({
+      title: tx("delete_btn", "Delete"),
+      message: `${tx("delete_btn", "Delete")}? ${costLabel(c.type)} · ${formatEur(c.amount)}`,
+      onRemove: () => setPendingDeleteIds((prev) => new Set(prev).add(c.cost_id)),
+      onRestore: () =>
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(c.cost_id);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/finance/costs/${c.cost_id}`);
+        if (editingId === c.cost_id) cancelEdit();
+        onChanged();
+      },
+      errorMessage: tx("error", "Could not delete."),
+    });
   }
 
   return (
@@ -1144,8 +1157,8 @@ function CostsTab({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <EmptyRow cols={6} label={tx("no_data", "No data yet.")} />}
-            {rows.map((c) => (
+            {visibleRows.length === 0 && <EmptyRow cols={6} label={tx("no_data", "No data yet.")} />}
+            {visibleRows.map((c) => (
               <tr key={c.cost_id} className="border-b border-line last:border-0">
                 <Td>{c.period_date}</Td>
                 <Td>
@@ -1204,6 +1217,7 @@ function CompensationTab({
   onChanged: () => void;
 }) {
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const today = new Date().toISOString().slice(0, 10);
   // The ledger is capped at the licensed year server-side, so the picker is too.
   const license = useLicenseLimits();
@@ -1216,6 +1230,8 @@ function CompensationTab({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<number>>(new Set());
+  const visibleRows = rows.filter((c) => !pendingDeleteIds.has(c.charge_id));
 
   useEffect(() => {
     if (!vehicleId && vehicles.length) setVehicleId(vehicles[0].vehicle_id);
@@ -1275,15 +1291,24 @@ function CompensationTab({
     }
   }
 
-  async function del(c: CompensationRow) {
-    if (!confirm(`${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${formatEur(c.amount)}`)) return;
-    try {
-      await apiDel(`/api/finance/compensations/${c.charge_id}`);
-      if (editingId === c.charge_id) cancelEdit();
-      onChanged();
-    } catch (e: any) {
-      toast.error(tx(e?.key || "error", "Could not delete."));
-    }
+  function del(c: CompensationRow) {
+    requestDelete({
+      title: tx("delete_btn", "Delete"),
+      message: `${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${formatEur(c.amount)}`,
+      onRemove: () => setPendingDeleteIds((prev) => new Set(prev).add(c.charge_id)),
+      onRestore: () =>
+        setPendingDeleteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(c.charge_id);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/finance/compensations/${c.charge_id}`);
+        if (editingId === c.charge_id) cancelEdit();
+        onChanged();
+      },
+      errorMessage: tx("error", "Could not delete."),
+    });
   }
 
   return (
@@ -1390,8 +1415,8 @@ function CompensationTab({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <EmptyRow cols={6} label={tx("no_data", "No data yet.")} />}
-            {rows.map((c) => (
+            {visibleRows.length === 0 && <EmptyRow cols={6} label={tx("no_data", "No data yet.")} />}
+            {visibleRows.map((c) => (
               <tr key={c.charge_id} className="border-b border-line last:border-0">
                 <Td>{c.period_date}</Td>
                 <Td>

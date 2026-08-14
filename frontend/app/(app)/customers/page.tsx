@@ -17,6 +17,7 @@ import { CustomerReportModal, useMonthLabel } from "@/components/CustomerReportM
 import { usePagedTable } from "@/lib/usePagedTable";
 import { Pagination } from "@/components/Pagination";
 import type { LanguagesInfo } from "@/lib/types";
+import { useDeleteUndo } from "@/lib/deleteUndo";
 
 // English fallback when a key isn't in the dictionary.
 const f = (t: (k: string) => string, key: string, fb: string) =>
@@ -141,6 +142,7 @@ function CustomerDialog({
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
 
   const canEdit = can(user, "service_vehicle");
   const canReassign = can(user, "edit_business_settings") || can(user, "manage_users");
@@ -280,29 +282,56 @@ function CustomerDialog({
     }
   }
 
-  async function removeRentalFromHistory(dealId: string) {
-    if (!confirm(f(t, "remove_from_history_confirm", "Remove this rental from history? This cannot be undone and will affect finance totals.")))
-      return;
-    try {
-      await apiDel(`/api/rentals/${dealId}`, { confirm: true });
-      toast.success(f(t, "rental_removed", "Rental removed from history."));
-      loadRentals();
-      onChange();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    }
+  function removeRentalFromHistory(dealId: string) {
+    let idx = -1;
+    let removed: CustomerRental | undefined;
+    requestDelete({
+      title: f(t, "delete_btn", "Delete"),
+      message: f(
+        t,
+        "remove_from_history_confirm",
+        "Remove this rental from history? This cannot be undone and will affect finance totals."
+      ),
+      onRemove: () =>
+        setRentals((prev) => {
+          idx = prev.findIndex((r) => r.deal_id === dealId);
+          removed = prev[idx];
+          return prev.filter((r) => r.deal_id !== dealId);
+        }),
+      onRestore: () =>
+        setRentals((prev) => {
+          if (!removed || prev.some((r) => r.deal_id === dealId)) return prev;
+          const next = [...prev];
+          next.splice(idx < 0 ? next.length : idx, 0, removed);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/rentals/${dealId}`, { confirm: true });
+        loadRentals();
+        onChange();
+      },
+      successMessage: f(t, "rental_removed", "Rental removed from history."),
+      errorMessage: t("error"),
+    });
   }
 
-  async function removeCustomer() {
-    if (!confirm(`${t("delete_btn")}: ${customer.full_name}?`)) return;
-    try {
-      await apiDel(`/api/customers/${customer.customer_id}`, { confirm: true });
-      toast.success(f(t, "customer_deleted", "Customer deleted."));
-      onChange();
-      onClose();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    }
+  function removeCustomer() {
+    requestDelete({
+      title: t("delete_btn"),
+      message: `${t("delete_btn")}: ${customer.full_name}?`,
+      // Optimistically close this detail dialog — nothing left in it to show
+      // once the customer is gone. There's no "restore" for a closed dialog;
+      // if Undo is clicked, the commit never fires and the customer simply
+      // stays intact in the list behind it.
+      onRemove: () => onClose(),
+      onRestore: () => {},
+      onCommit: async () => {
+        await apiDel(`/api/customers/${customer.customer_id}`, { confirm: true });
+        onChange();
+      },
+      successMessage: f(t, "customer_deleted", "Customer deleted."),
+      errorMessage: t("error"),
+    });
   }
 
   const lbl = "text-xs text-muted";
@@ -805,6 +834,7 @@ export default function CustomersPage() {
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<CustomerRow | null>(null);
@@ -880,15 +910,30 @@ export default function CustomersPage() {
     if (c) setOpen(c);
   }
 
-  async function deleteCustomer(c: CustomerRow) {
-    if (!confirm(`${t("delete_btn")}: ${c.full_name}?`)) return;
-    try {
-      await apiDel(`/api/customers/${c.customer_id}`, { confirm: true });
-      toast.success(f(t, "customer_deleted", "Customer deleted."));
-      load();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
-    }
+  function deleteCustomer(c: CustomerRow) {
+    let idx = -1;
+    requestDelete({
+      title: t("delete_btn"),
+      message: `${t("delete_btn")}: ${c.full_name}?`,
+      onRemove: () =>
+        setRows((prev) => {
+          idx = prev.findIndex((r) => r.customer_id === c.customer_id);
+          return prev.filter((r) => r.customer_id !== c.customer_id);
+        }),
+      onRestore: () =>
+        setRows((prev) => {
+          if (prev.some((r) => r.customer_id === c.customer_id)) return prev;
+          const next = [...prev];
+          next.splice(idx < 0 ? next.length : idx, 0, c);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/customers/${c.customer_id}`, { confirm: true });
+        load();
+      },
+      successMessage: f(t, "customer_deleted", "Customer deleted."),
+      errorMessage: t("error"),
+    });
   }
 
   return (

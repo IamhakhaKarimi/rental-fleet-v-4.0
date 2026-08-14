@@ -8,6 +8,7 @@ import { usePolling } from "@/lib/usePolling";
 import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can } from "@/lib/perms";
 import { formatEur } from "@/lib/money";
+import { useDeleteUndo } from "@/lib/deleteUndo";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RefreshIcon } from "@/components/RefreshIcon";
@@ -136,6 +137,7 @@ type Photo = { photo_id: number; photo: string; position: number };
 function PhotoManager({ vehicleId }: { vehicleId: string }) {
   const t = useT();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const tf = (k: string, fb: string) => (t(k) === k ? fb : t(k));
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [busy, setBusy] = useState(false);
@@ -172,14 +174,32 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
     }
   }
 
-  async function remove(photoId: number) {
-    try {
-      await apiDel(`/api/vehicles/photos/${photoId}`);
-      toast.success(tf("photo_deleted", "Photo deleted."));
-      refetch();
-    } catch (e: any) {
-      setErr(t(e?.key || "error"));
-    }
+  function remove(photoId: number) {
+    let idx = -1;
+    let removed: Photo | undefined;
+    requestDelete({
+      title: tf("delete_photo", "Delete photo"),
+      message: tf("confirm_delete_photo", "Delete this photo? This cannot be undone."),
+      onRemove: () =>
+        setPhotos((prev) => {
+          idx = prev.findIndex((p) => p.photo_id === photoId);
+          removed = prev[idx];
+          return prev.filter((p) => p.photo_id !== photoId);
+        }),
+      onRestore: () =>
+        setPhotos((prev) => {
+          if (!removed || prev.some((p) => p.photo_id === photoId)) return prev;
+          const next = [...prev];
+          next.splice(idx < 0 ? next.length : idx, 0, removed);
+          return next;
+        }),
+      onCommit: async () => {
+        await apiDel(`/api/vehicles/photos/${photoId}`);
+        refetch();
+      },
+      successMessage: tf("photo_deleted", "Photo deleted."),
+      errorMessage: t("error"),
+    });
   }
 
   return (
@@ -239,6 +259,7 @@ function PhotoManager({ vehicleId }: { vehicleId: string }) {
 export default function FleetPage() {
   const t = useT();
   const toast = useToast();
+  const { requestDelete } = useDeleteUndo();
   const tf = (k: string, fb: string) => (t(k) === k ? fb : t(k));
   const { user } = useAuth();
   const [vehicles, setVehicles] = useState<V[]>([]);
@@ -284,16 +305,52 @@ export default function FleetPage() {
       toast.error(t(e?.key || "error"));
     }
   }
-  async function hardDelete(v: V, skipConfirm = false) {
-    if (!skipConfirm && !confirm(`${t("delete_btn")} (permanent): ${v.vehicle_id}?`)) return;
-    try {
+  function hardDelete(v: V, skipConfirm = false) {
+    let idx = -1;
+    const doRemove = () =>
+      setVehicles((prev) => {
+        idx = prev.findIndex((x) => x.vehicle_id === v.vehicle_id);
+        return prev.filter((x) => x.vehicle_id !== v.vehicle_id);
+      });
+    const doRestore = () =>
+      setVehicles((prev) => {
+        if (prev.some((x) => x.vehicle_id === v.vehicle_id)) return prev;
+        const next = [...prev];
+        next.splice(idx < 0 ? next.length : idx, 0, v);
+        return next;
+      });
+    const doCommit = async () => {
       await apiDel(`/api/vehicles/${v.vehicle_id}`);
-      toast.success(`${v.vehicle_id} — ${tf("vehicle_deleted", "vehicle deleted")}`);
       setRemoving(null);
       load();
-    } catch (e: any) {
-      toast.error(t(e?.key || "error"));
+    };
+    if (skipConfirm) {
+      // The card view's own Archive/Delete modal already confirmed this — don't
+      // show ConfirmDeleteModal again, but still run the delete through the same
+      // 10s-delayed commit shape (optimistic removal now, real DELETE call after
+      // the window, restore + error toast on failure).
+      doRemove();
+      setTimeout(async () => {
+        try {
+          await doCommit();
+          toast.success(`${v.vehicle_id} — ${tf("vehicle_deleted", "vehicle deleted")}`);
+        } catch (e: any) {
+          doRestore();
+          toast.error(t(e?.key || "error"));
+        }
+      }, 10000);
+      return;
     }
+    requestDelete({
+      title: tf("delete_vehicle", "Delete vehicle"),
+      message: `${t("delete_btn")} (permanent): ${v.vehicle_id}?`,
+      confirmLabel: t("delete_btn"),
+      onRemove: doRemove,
+      onRestore: doRestore,
+      onCommit: doCommit,
+      successMessage: `${v.vehicle_id} — ${tf("vehicle_deleted", "vehicle deleted")}`,
+      errorMessage: t("error"),
+    });
   }
 
   const canEdit = can(user, "service_vehicle");

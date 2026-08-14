@@ -24,7 +24,7 @@ def list_vehicles(include_deleted: bool = False) -> list[dict]:
     where = "" if include_deleted else "WHERE status != 'DELETED'"
     sql = f"""SELECT vehicle_id, make_model, year, license_plate, color,
                      mileage, status, base_daily_rate, notes
-              FROM vehicles {where} ORDER BY vehicle_id"""
+              FROM vehicles {where} ORDER BY make_model ASC"""
     with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]
 

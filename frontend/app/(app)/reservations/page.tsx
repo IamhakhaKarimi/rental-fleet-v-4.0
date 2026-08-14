@@ -31,6 +31,7 @@ export default function ReservationsPage() {
   const toast = useToast();
   const [rentals, setRentals] = useState<ActiveRental[]>([]);
   const [booking, setBooking] = useState(false);
+  const [bookingStep, setBookingStep] = useState<string>("period");
   const [exporting, setExporting] = useState(false);
   const [range, setRange] = useState<TLRange>("week");
   const [busy, setBusy] = useState(false);
@@ -260,12 +261,26 @@ export default function ReservationsPage() {
       {booking && (
         <Modal
           title={t("quick_register")}
-          onClose={() => setBooking(false)}
-          size="full"
+          onClose={() => {
+            setBooking(false);
+            setBookingStep("period");
+          }}
+          size={bookingStep === "review" ? "full" : "compact"}
           fullHeight
-          bodyClassName="!mt-4 !mb-4 !p-4"
+          bodyClassName="!mt-[10px] !mb-[10px] !px-[50px] !py-[10px]"
         >
-          <BookingDialog onClose={() => setBooking(false)} onCreated={load} />
+          <BookingDialog
+            onClose={() => {
+              setBooking(false);
+              setBookingStep("period");
+            }}
+            onCreated={() => {
+              load();
+              setBooking(false);
+              setBookingStep("period");
+            }}
+            onStepChange={setBookingStep}
+          />
         </Modal>
       )}
 

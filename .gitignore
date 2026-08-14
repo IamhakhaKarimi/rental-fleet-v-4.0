@@ -35,6 +35,7 @@ out/
 build/
 dist/
 .turbo/
+graphify-out/
 *.tsbuildinfo
 next-env.d.ts
 .vercel/

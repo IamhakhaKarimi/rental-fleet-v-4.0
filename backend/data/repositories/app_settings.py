@@ -20,6 +20,13 @@ MAPS_KEY = "business_maps_url"
 EMAIL_KEY = "business_email"
 IBAN_KEY = "business_iban"
 PAY_QR_KEY = "pay_qr_enabled"
+# Display currency + the EUR->ALL rate used to convert stored cents (always EUR,
+# see config/settings.py) into Albanian Lek for display. Rate is a decimal string
+# (e.g. "92" or "92.5") so it survives round-trips without float drift.
+CURRENCY_KEY = "business_currency"
+EXCHANGE_RATE_KEY = "business_eur_all_rate"
+DEFAULT_CURRENCY = "EUR"
+DEFAULT_EUR_ALL_RATE = "92"
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -125,6 +132,32 @@ def get_pay_qr_enabled() -> bool:
 
 def set_pay_qr_enabled(enabled: bool):
     set_setting(PAY_QR_KEY, "1" if enabled else "")
+
+
+def get_currency() -> str:
+    return get_setting(CURRENCY_KEY, DEFAULT_CURRENCY)
+
+
+def set_currency(v: str):
+    set_setting(CURRENCY_KEY, (v or "").strip().upper() or DEFAULT_CURRENCY)
+
+
+def get_eur_all_rate() -> float:
+    try:
+        rate = float(get_setting(EXCHANGE_RATE_KEY, DEFAULT_EUR_ALL_RATE))
+        return rate if rate > 0 else float(DEFAULT_EUR_ALL_RATE)
+    except (TypeError, ValueError):
+        return float(DEFAULT_EUR_ALL_RATE)
+
+
+def set_eur_all_rate(rate: float):
+    try:
+        val = float(rate)
+    except (TypeError, ValueError):
+        val = float(DEFAULT_EUR_ALL_RATE)
+    if val <= 0:
+        val = float(DEFAULT_EUR_ALL_RATE)
+    set_setting(EXCHANGE_RATE_KEY, str(val))
 
 
 # ── Theme (super-admin customization: font + colour roles) ───────────────────

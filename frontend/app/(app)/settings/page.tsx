@@ -689,7 +689,14 @@ interface BusinessInfo {
   email: string;
   iban: string;
   pay_qr_enabled: boolean;
+  currency: string;
+  exchange_rate: number;
 }
+
+const CURRENCY_OPTIONS = [
+  { value: "EUR", label: "EUR — €" },
+  { value: "ALL", label: "ALL — Lek" },
+];
 
 function ImageUploader({
   label,
@@ -955,6 +962,7 @@ function BusinessTab() {
     iban: "",
     pay_qr_enabled: false,
   });
+  const [currency, setCurrency] = useState({ currency: "EUR", exchange_rate: 92 });
   const [msg, setMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
 
   const load = useCallback(() => {
@@ -969,6 +977,10 @@ function BusinessTab() {
           maps_url: d.maps_url || "",
           iban: d.iban || "",
           pay_qr_enabled: !!d.pay_qr_enabled,
+        });
+        setCurrency({
+          currency: d.currency || "EUR",
+          exchange_rate: d.exchange_rate || 92,
         });
       })
       .catch(() => {});
@@ -998,6 +1010,50 @@ function BusinessTab() {
             onClick={() =>
               run(async () => {
                 await apiPut("/api/settings/business/name", { name });
+                load();
+              }, f(t, "saved", "Saved"))
+            }
+          >
+            {f(t, "update_btn", "Save")}
+          </button>
+        </SectionCard>
+      )}
+
+      {isSuper && (
+        <SectionCard title={f(t, "currency_settings", "Currency")} icon="payments">
+          <div className="text-xs text-muted">
+            {f(t, "currency_help", "Amounts are always stored in EUR; this only controls which currency is shown.")}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label={f(t, "currency_label", "Display Currency")}>
+              <select
+                value={currency.currency}
+                onChange={(e) => setCurrency((p) => ({ ...p, currency: e.target.value }))}
+              >
+                {CURRENCY_OPTIONS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label={f(t, "currency_rate_label", "Exchange rate (1 EUR = ? ALL)")}>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={currency.exchange_rate}
+                onChange={(e) =>
+                  setCurrency((p) => ({ ...p, exchange_rate: parseFloat(e.target.value) || 0 }))
+                }
+              />
+            </Field>
+          </div>
+          <button
+            className="btn btn-primary w-full"
+            onClick={() =>
+              run(async () => {
+                await apiPut("/api/settings/business/currency", currency);
                 load();
               }, f(t, "saved", "Saved"))
             }

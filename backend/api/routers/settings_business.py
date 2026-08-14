@@ -77,6 +77,11 @@ class BusinessNameIn(BaseModel):
     name: str = ""
 
 
+class CurrencyIn(BaseModel):
+    currency: str = "EUR"
+    exchange_rate: float = 92
+
+
 class ContactIn(BaseModel):
     phone: str = ""
     email: str = ""
@@ -137,7 +142,21 @@ def get_business(user: dict = Depends(require("manage_users"))) -> dict:
         "email": app_cfg.get_business_email(),
         "iban": app_cfg.get_business_iban(),
         "pay_qr_enabled": app_cfg.get_pay_qr_enabled(),
+        "currency": app_cfg.get_currency(),
+        "exchange_rate": app_cfg.get_eur_all_rate(),
     }
+
+
+@router.put("/settings/business/currency")
+def set_currency(body: CurrencyIn,
+                 user: dict = Depends(require("edit_business_settings"))) -> dict:
+    currency = (body.currency or "").strip().upper()
+    if currency not in ("EUR", "ALL"):
+        raise HTTPException(400, detail="fields_required")
+    app_cfg.set_currency(currency)
+    app_cfg.set_eur_all_rate(body.exchange_rate)
+    audit_service.record(user, "edit_currency", "settings", "business_currency", currency)
+    return {"currency": app_cfg.get_currency(), "exchange_rate": app_cfg.get_eur_all_rate()}
 
 
 @router.put("/settings/business/name")

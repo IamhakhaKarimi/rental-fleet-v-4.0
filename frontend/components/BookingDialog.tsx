@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { formatEur } from "@/lib/money";
-import { addDaysISO, daysBetweenISO, todayISO } from "@/lib/dates";
+import { addDaysISO, billedDays, daysBetweenISO, todayISO } from "@/lib/dates";
 import { isLicenseError, licenseCapNote, licenseMessage, useLicenseLimits } from "@/lib/license";
 import { DateField } from "@/components/DateField";
 import { TimeSelect24 } from "@/components/TimeSelect24";
@@ -143,7 +143,10 @@ export function BookingDialog({
   const returnDate = useMemo(() => addDaysISO(startDate, days), [startDate, days]);
   const onReturnDateChange = (iso: string) => {
     if (!iso) return;
-    setDays(clampDays(daysBetweenISO(startDate, iso)));
+    // Dragging the return date accounts for whatever start/return time is
+    // already picked, so a same-day-next-day pick that lands past 24h (e.g.
+    // 10:00 → next day 15:00) rounds up to the extra billed day, not just 1.
+    setDays(clampDays(billedDays(startDate, startTime, iso, returnTime)));
   };
 
   const maxDays = useMemo(
@@ -194,7 +197,15 @@ export function BookingDialog({
     if (car) setRate(Math.max(0, Math.round(car.base_daily_rate / 100)));
   }, [vehicleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const total = useMemo(() => days * rate * 100, [days, rate]);
+  // Mirrors the server (`billed_days` in scheduling_service.py): `days` picks
+  // the promised return date, but a return_time later than start_time still
+  // pushes the actual stay past that many full 24h blocks, so the invoice
+  // total bills the extra day even though the return date itself doesn't move.
+  const billedDayCount = useMemo(
+    () => billedDays(startDate, startTime, returnDate, returnTime),
+    [startDate, startTime, returnDate, returnTime]
+  );
+  const total = useMemo(() => billedDayCount * rate * 100, [billedDayCount, rate]);
 
   const periodDone = !overLicense;
   const vehicleDone = !!vehicleId && rate > 0;
@@ -380,6 +391,14 @@ export function BookingDialog({
                   {tf("cars_free", "Cars available")}: <b className="text-ink">{cars.length}</b>
                 </div>
               </div>
+              {billedDayCount > days && (
+                <div className="text-[11px] text-warn mt-1">
+                  {tf(
+                    "extra_day_over_24h",
+                    `Return time is past a full 24h block — billing ${billedDayCount} days.`
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -518,7 +537,7 @@ export function BookingDialog({
                   startTime,
                   returnDate,
                   returnTime,
-                  days,
+                  days: billedDayCount,
                   dailyRateEuros: rate,
                   depositEuros: deposit,
                   invoiceLang: lang,

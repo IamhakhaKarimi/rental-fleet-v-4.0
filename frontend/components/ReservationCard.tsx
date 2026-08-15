@@ -9,7 +9,7 @@ import { StatusBadge } from "./StatusBadge";
 import { SwipeCard, SwipeField, SwipePanel } from "./SwipeCard";
 import { TimeSelect24 } from "./TimeSelect24";
 import { DateField } from "./DateField";
-import { addDaysISO } from "@/lib/dates";
+import { addDaysISO, billedDays } from "@/lib/dates";
 import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 
 export interface ActiveRental {
@@ -94,7 +94,17 @@ export function EditReservationForm({
   const [returnTime, setReturnTime] = useState(r.end_dt.slice(11, 16) || "10:00");
   const [cars, setCars] = useState<{ vehicle_id: string; make_model: string; license_plate?: string }[]>([]);
   const [busy, setBusy] = useState(false);
-  const editDays = Math.max(1, daysBetweenISO(startDate, returnDate));
+  // Billed off the real elapsed span (any time past a full 24h multiple owes
+  // the next day), not a plain calendar-date diff — see lib/dates.ts#billedDays.
+  const editDays = billedDays(startDate, startTime, returnDate, returnTime);
+  // Nudging the day count resets the return time to match the start time, so
+  // the stepper always lands on an exact N-day span; dragging the return date
+  // or time further away from there is what makes the extra day show up.
+  const setEditDays = (n: number) => {
+    const nd = Math.max(1, n);
+    setReturnTime(startTime);
+    setReturnDate(addDaysISO(startDate, nd));
+  };
 
   useEffect(() => {
     apiGet<{ vehicle_id: string; make_model: string; license_plate?: string }[]>("/api/vehicles/active")
@@ -184,8 +194,9 @@ export function EditReservationForm({
           />
         </div>
       </div>
-      <div className="text-xs text-muted -mt-1">
-        {editDays} {t("days")}
+      <div>
+        <label className={lbl}>{t("days")}</label>
+        <Stepper value={editDays} set={setEditDays} step={1} />
       </div>
       <div>
         <label className={lbl}>{t("negotiated_rate")} (€)</label>

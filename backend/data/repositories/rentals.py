@@ -1,4 +1,5 @@
 """Rentals repository — create, list, cancel, and overdue detection."""
+import math
 from datetime import datetime
 from sqlalchemy import text
 from config.settings import LANGUAGES, DEFAULT_LANG
@@ -195,9 +196,12 @@ def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "
             return -2
         new_start = datetime.combine(new_start_date, new_start_time)
         new_end = datetime.combine(new_end_date, new_end_time)
-        days = (new_end_date - new_start_date).days
-        if days < 1 or new_end <= new_start:
+        if new_end <= new_start:
             return -2
+        # Any time past a full 24h multiple owes the next day (a 10:00 pickup
+        # returned at 15:00 the next day is 29h — 2 billed days, not 1), so bill
+        # off the actual elapsed span rather than the calendar-date difference.
+        days = max(1, math.ceil((new_end - new_start).total_seconds() / 86400))
         s = new_start.strftime("%Y-%m-%dT%H:%M:%S")
         e = new_end.strftime("%Y-%m-%dT%H:%M:%S")
         clash = conn.execute(text(

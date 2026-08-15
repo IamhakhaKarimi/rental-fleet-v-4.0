@@ -137,13 +137,17 @@ def create(body: BookingIn, user: dict = Depends(require("create_reservation")))
     start_dt, end_dt = _window(body.start_date, body.start_time, body.days, body.return_time)
     if not sched.is_vehicle_free(body.vehicle_id, start_dt, end_dt):
         raise HTTPException(409, detail="no_cars")
+    # `days` picks the return date, but a later return_time than start_time still
+    # pushes the actual stay past that many full 24h blocks — bill the extra day
+    # rather than trusting the raw day count (same rule as editing dates).
+    billed_days = sched.billed_days(start_dt, end_dt)
     deal_id = rrepo.create_rental(
         vehicle_id=body.vehicle_id,
         make_model=body.make_model,
         client_name=body.client_name.strip().upper(),
         phone=body.phone.strip().upper(),
         id_passport=body.id_passport.strip().upper(),
-        start_dt=start_dt, end_dt=end_dt, days=int(body.days),
+        start_dt=start_dt, end_dt=end_dt, days=billed_days,
         daily_rate_cents=_cents(body.daily_rate_euros),
         deposit_cents=_cents(body.deposit_euros),
         created_by=user["username"], created_by_name=user.get("full_name", ""),

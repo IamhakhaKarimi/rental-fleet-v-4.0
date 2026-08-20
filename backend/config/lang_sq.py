@@ -178,6 +178,17 @@ UI = {
     "no_create_perm":    "Ju nevojitet të paktën roli Agjent për të krijuar qira.",
     "overdue_badge":     "ME VONESË",
     "overdue_detail":    "{h:.0f} orë vonesë",
+    # customers — list ordering + report column ordering
+    "sorted_by":         "Renditur sipas",
+    "sort_az":           "Emri i klientit (A–Z)",
+    "sort_start_date":   "Data e fillimit (më e reja e para)",
+    "sort_price":        "Çmimi (më i larti i pari)",
+    "sort_customers_hint": "Renditja e listës së klientëve",
+    "report_order":      "Renditja e printimit",
+    "report_drag_hint":  "Tërhiqni një kolonë për të ndryshuar vendin ku printohet — kreu i listës është kolona më e majtë.",
+    "reset_order":       "Rivendos renditjen",
+    "move_up":           "Lëviz lart",
+    "move_down":         "Lëviz poshtë",
     # customers
     "customers_title":   "Regjistri i Klientëve",
     "card_open":         "Hap",

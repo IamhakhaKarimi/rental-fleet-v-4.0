@@ -1,7 +1,8 @@
 "use client";
-import { createContext, useCallback, useContext, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDeleteModal } from "@/components/ConfirmDeleteModal";
+import { beginUnloadFlush } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import { useT } from "@/lib/i18n";
 
@@ -14,6 +15,23 @@ import { useT } from "@/lib/i18n";
  * nothing is sent to the server. If the countdown elapses, `onCommit` (the
  * actual DELETE call) fires; on failure `onRestore` runs again and an error
  * toast is shown, since the optimistic removal must be rolled back.
+ *
+ * Three things make that optimistic window honest rather than a lie the next
+ * reload exposes:
+ *
+ *  - **The commit is settled synchronously.** `settle()` reads and rewrites a
+ *    ref, not `setPending`'s updater: a state updater runs during the NEXT
+ *    render, so the timer's `if (!toCommit) return` fired before the updater
+ *    had handed it anything and every delete bailed out un-sent.
+ *  - **The window does not survive the page.** A reload, a close or a
+ *    navigation inside those 10s used to drop the pending `setTimeout` on the
+ *    floor: the row had vanished from the screen but no DELETE was ever sent,
+ *    so it came back on the next load. `pagehide` now commits everything still
+ *    pending, `keepalive` so the request outlives the document.
+ *  - **A background refetch cannot resurrect a removed row.** Pages poll, and a
+ *    poll landing mid-window would happily re-add the row the user just
+ *    deleted. Callers pass a `key` and filter their rows through `isPending`,
+ *    which stays true until the delete commits or is undone.
  */
 
 const UNDO_SECONDS = 10;
@@ -22,6 +40,9 @@ interface DeleteRequest {
   title: string;
   message: string;
   confirmLabel?: string;
+  /** Stable id of the row being deleted (e.g. `customer:12`). Pass it to keep
+   *  the row hidden through a background refetch — see `isPending`. */
+  key?: string;
   /** Optimistically hide the item from the UI. Runs right after confirm. */
   onRemove: () => void;
   /** Bring the item back — used both for explicit Undo and for a failed commit. */
@@ -35,6 +56,7 @@ interface DeleteRequest {
 
 interface PendingDelete {
   id: number;
+  key?: string;
   title: string;
   secondsLeft: number;
   onRestore: () => void;
@@ -46,9 +68,13 @@ interface PendingDelete {
 
 interface DeleteUndoApi {
   requestDelete: (req: DeleteRequest) => void;
+  /** True while `key`'s delete is in its undo window (removed on screen, not
+   *  yet sent). Filter freshly-fetched rows through this so a poll landing
+   *  mid-window doesn't put the row back. */
+  isPending: (key: string) => boolean;
 }
 
-const Ctx = createContext<DeleteUndoApi>({ requestDelete: () => {} });
+const Ctx = createContext<DeleteUndoApi>({ requestDelete: () => {}, isPending: () => false });
 
 export function DeleteUndoProvider({ children }: { children: React.ReactNode }) {
   const [confirming, setConfirming] = useState<DeleteRequest | null>(null);
@@ -56,26 +82,65 @@ export function DeleteUndoProvider({ children }: { children: React.ReactNode }) 
   const seq = useRef(0);
   const toast = useToast();
 
-  const settle = useCallback((id: number, run: (p: PendingDelete) => void) => {
-    setPending((list) => {
-      const found = list.find((p) => p.id === id);
-      if (found) {
-        clearInterval(found.timer);
-        run(found);
-      }
-      return list.filter((p) => p.id !== id);
-    });
+  // The ref is the AUTHORITATIVE pending list; `pending` state exists only to
+  // render the countdown bars. It has to be the ref, because both places that
+  // finish a delete — the 10s timer and the pagehide flush — run outside
+  // React's render cycle and need the list, and their answer, synchronously.
+  const pendingRef = useRef<PendingDelete[]>([]);
+  const publish = useCallback((list: PendingDelete[]) => {
+    pendingRef.current = list;
+    setPending(list);
   }, []);
+
+  /** Take `id` out of the pending list and return it — synchronously — or
+   *  undefined if it is already settled (undone, committed, or flushed). */
+  const settle = useCallback(
+    (id: number): PendingDelete | undefined => {
+      const found = pendingRef.current.find((p) => p.id === id);
+      if (!found) return undefined;
+      clearInterval(found.timer);
+      publish(pendingRef.current.filter((p) => p.id !== id));
+      return found;
+    },
+    [publish]
+  );
 
   const undo = useCallback(
     (id: number) => {
-      settle(id, (p) => p.onRestore());
+      settle(id)?.onRestore();
     },
     [settle]
   );
 
   const requestDelete = useCallback((req: DeleteRequest) => {
     setConfirming(req);
+  }, []);
+
+  const isPending = useCallback(
+    (key: string) => pending.some((p) => p.key === key),
+    [pending]
+  );
+
+  // Leaving the page ends the undo window early rather than cancelling the
+  // delete: the user already confirmed it and watched the row disappear, so
+  // silently keeping it is the wrong half of the bargain. `pagehide` covers
+  // reload, close and cross-document navigation alike (and, unlike `unload`,
+  // still fires for a page entering the back/forward cache).
+  useEffect(() => {
+    const flush = () => {
+      const list = pendingRef.current;
+      if (list.length === 0) return;
+      pendingRef.current = [];
+      beginUnloadFlush();
+      for (const p of list) {
+        clearInterval(p.timer);
+        // No await and no rollback: the document is going away, and the
+        // request is keepalive so the browser sees it through.
+        p.onCommit().catch(() => {});
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
   }, []);
 
   const confirm = useCallback(() => {
@@ -85,14 +150,17 @@ export function DeleteUndoProvider({ children }: { children: React.ReactNode }) 
     req.onRemove();
     const id = ++seq.current;
     const timer: ReturnType<typeof setInterval> = setInterval(() => {
-      setPending((list) =>
-        list.map((p) => (p.id === id ? { ...p, secondsLeft: p.secondsLeft - 1 } : p))
+      publish(
+        pendingRef.current.map((p) =>
+          p.id === id ? { ...p, secondsLeft: p.secondsLeft - 1 } : p
+        )
       );
     }, 1000);
-    setPending((list) => [
-      ...list,
+    publish([
+      ...pendingRef.current,
       {
         id,
+        key: req.key,
         title: req.title,
         secondsLeft: UNDO_SECONDS,
         onRestore: req.onRestore,
@@ -103,11 +171,8 @@ export function DeleteUndoProvider({ children }: { children: React.ReactNode }) 
       },
     ]);
     setTimeout(async () => {
-      let toCommit: PendingDelete | undefined;
-      settle(id, (p) => {
-        toCommit = p;
-      });
-      if (!toCommit) return;
+      const toCommit = settle(id);
+      if (!toCommit) return; // undone, or already flushed by pagehide
       try {
         await toCommit.onCommit();
         if (toCommit.successMessage) toast.success(toCommit.successMessage);
@@ -116,10 +181,10 @@ export function DeleteUndoProvider({ children }: { children: React.ReactNode }) 
         toast.error(toCommit.errorMessage ?? e?.message ?? "Delete failed.");
       }
     }, UNDO_SECONDS * 1000);
-  }, [confirming, settle, toast]);
+  }, [confirming, publish, settle, toast]);
 
   return (
-    <Ctx.Provider value={{ requestDelete }}>
+    <Ctx.Provider value={{ requestDelete, isPending }}>
       {children}
       {confirming && (
         <ConfirmDeleteModal

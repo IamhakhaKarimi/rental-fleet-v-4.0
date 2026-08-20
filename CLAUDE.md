@@ -393,6 +393,10 @@ Two specificity gotchas that layer already solves:
   a ref now; `pagehide` flushes anything still pending (`keepalive`), and
   `isPending(key)` keeps a polled refetch from resurrecting a removed row.
 
+  The report modal's remaining hardcoded strings (`Select all`, `Columns to
+  include`, `Sorted by`, etc. — 20 keys in all) now have tr/en/sq entries too,
+  so the whole modal localizes instead of just the labels this session added.
+
 - **Mobile + tablet responsiveness pass.** See "Responsive Tiers" above. Phone
   gets a thumb-zone bottom bar + burger sheet, tablet gets the icon rail, and
   desktop (≥1024px) is unchanged — verified by measuring `<main>` padding,

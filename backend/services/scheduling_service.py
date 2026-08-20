@@ -12,6 +12,7 @@ available_vehicles: answers "which cars are free for [start, end)?" using an
                    index, so it stays fast as the deal history grows.
 """
 
+import math
 from datetime import datetime, date, time, timedelta
 from sqlalchemy import text
 from core.db import db_read
@@ -20,6 +21,14 @@ from core.db import db_read
 def compute_return(start_date: date, start_time: time, days: int, return_time: time) -> datetime:
     return_date = start_date + timedelta(days=int(days))
     return datetime.combine(return_date, return_time)
+
+
+def billed_days(start_dt: datetime, end_dt: datetime) -> int:
+    """Whole days to bill for a [start_dt, end_dt) window: any time past a full
+    24h multiple owes the next day, matching how car-rental desks price a stay
+    that runs past checkout by even a minute. Never less than 1 day."""
+    elapsed = (end_dt - start_dt).total_seconds()
+    return max(1, math.ceil(elapsed / 86400))
 
 
 # How far ahead (hours) a return counts as "due soon" — the alert window.

@@ -88,6 +88,30 @@ export function daysBetweenISO(a: ISODate, b: ISODate): number {
   return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
+/**
+ * Whole days to *bill* for a check-in/check-out span, given each side's
+ * "HH:MM" time-of-day. Mirrors `services/scheduling_service.py#billed_days`:
+ * any time past a full 24h multiple owes the next day (10:00 pickup returned
+ * 15:00 the next day is 29h — 2 billed days, not the 1 a calendar-date diff
+ * would give), rounded up, minimum 1. Falls back to 1 on unparseable input.
+ */
+export function billedDays(
+  startIso: ISODate,
+  startTime: string,
+  endIso: ISODate,
+  endTime: string
+): number {
+  const start = fromISO(startIso);
+  const end = fromISO(endIso);
+  if (!start || !end) return 1;
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  start.setHours(sh || 0, sm || 0, 0, 0);
+  end.setHours(eh || 0, em || 0, 0, 0);
+  const elapsedMs = end.getTime() - start.getTime();
+  return Math.max(1, Math.ceil(elapsedMs / 86400000));
+}
+
 /** Lexicographic compare works on ISO day strings — no Date allocation needed. */
 export const isBefore = (a: ISODate, b: ISODate) => a < b;
 export const isAfter = (a: ISODate, b: ISODate) => a > b;

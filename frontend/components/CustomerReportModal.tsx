@@ -75,6 +75,11 @@ export function CustomerReportModal({
   const [columns, setColumns] = useState<ReportColumn[]>([]);
   const [months, setMonths] = useState<Set<string>>(new Set());
   const [cols, setCols] = useState<Set<string>>(new Set(DEFAULT_COLUMNS));
+  // The print order, left-to-right. Drag (or the up/down buttons) rewrites it, and
+  // the backend prints `columns` in exactly the order it receives them.
+  const [order, setOrder] = useState<string[]>([]);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("name");
   const [numbered, setNumbered] = useState(true);
   const [pageSize, setPageSize] = useState(25);
@@ -93,6 +98,13 @@ export function CustomerReportModal({
       .then(([rows, colDefs]) => {
         setRentals(rows);
         setColumns(colDefs);
+        // Opening layout: the default columns in their default order, then the
+        // opt-in ones. After that the order is the user's — never re-grouped.
+        const keys = colDefs.map((c) => c.key);
+        setOrder([
+          ...DEFAULT_COLUMNS.filter((k) => keys.includes(k)),
+          ...keys.filter((k) => !DEFAULT_COLUMNS.includes(k)),
+        ]);
         // Default: every month on, so the report is complete until narrowed.
         setMonths(new Set(rows.map((r) => (r.start_dt || "").slice(0, 7)).filter(Boolean)));
       })
@@ -126,21 +138,52 @@ export function CustomerReportModal({
   const allMonthsOn = monthGroups.length > 0 && monthGroups.every(([ym]) => months.has(ym));
   const allColsOn = columns.length > 0 && columns.every((c) => cols.has(c.key));
 
-  // Ordered by the registry so the summary line matches the printed layout.
-  const chosenCols = useMemo(
-    () => columns.filter((c) => cols.has(c.key)).map((c) => c.key),
-    [columns, cols]
+  // The ticked columns in drag order — this is what gets printed, and what the
+  // summary line counts.
+  const chosenCols = useMemo(() => order.filter((k) => cols.has(k)), [order, cols]);
+
+  const labelOf = useMemo(() => {
+    const m = new Map(columns.map((c) => [c.key, c.label]));
+    return (k: string) => m.get(k) || k;
+  }, [columns]);
+
+  // The list as rendered: every known column, in the user's order, ticked or not.
+  const orderedColumns = useMemo(
+    () => order.filter((k) => columns.some((c) => c.key === k)),
+    [order, columns]
   );
 
-  // Checkbox layout: checked columns grouped first (filling top-to-bottom down
-  // column 1, then column 2), unchecked ones trailing after — so a glance at the
-  // grid shows what's in the report without hunting across three columns.
-  const orderedColumns = useMemo(() => {
-    const checked = columns.filter((c) => cols.has(c.key));
-    const unchecked = columns.filter((c) => !cols.has(c.key));
-    return [...checked, ...unchecked];
-  }, [columns, cols]);
-  const colRows = Math.ceil(orderedColumns.length / 3) || 1;
+  // Move `key` so it lands where `target` currently sits — a drop and a one-step
+  // nudge are the same splice.
+  const moveTo = useCallback((key: string, target: string) => {
+    if (key === target) return;
+    setOrder((prev) => {
+      const from = prev.indexOf(key);
+      const to = prev.indexOf(target);
+      if (from < 0 || to < 0) return prev;
+      const next = prev.slice();
+      next.splice(from, 1);
+      next.splice(to, 0, key);
+      return next;
+    });
+  }, []);
+
+  // Touch has no HTML5 drag-and-drop, and a keyboard user has no pointer at all,
+  // so every reorder a drag can do is also reachable from these two buttons.
+  const nudge = (key: string, delta: number) => {
+    const i = orderedColumns.indexOf(key);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= orderedColumns.length) return;
+    moveTo(key, orderedColumns[j]);
+  };
+
+  const resetOrder = () => {
+    const keys = columns.map((c) => c.key);
+    setOrder([
+      ...DEFAULT_COLUMNS.filter((k) => keys.includes(k)),
+      ...keys.filter((k) => !DEFAULT_COLUMNS.includes(k)),
+    ]);
+  };
   // Past ~10 columns an A4 portrait page starts ellipsising cells.
   const tooWide = isPdf && chosenCols.length + (numbered ? 1 : 0) > 10;
 
@@ -197,33 +240,111 @@ export function CustomerReportModal({
         <div className="text-sm text-muted">{f(t, "loading", "Loading…")}</div>
       ) : (
         <div className="space-y-5">
-          {/* Columns */}
+          {/* Columns — tick what to print, drag to set the left-to-right order */}
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <div className={sectionTitle}>{f(t, "report_columns", "Columns to include")}</div>
-              <button
-                className="btn !py-1 !px-2 text-xs shrink-0"
-                onClick={() => setCols(allColsOn ? new Set() : new Set(columns.map((c) => c.key)))}
-              >
-                {allColsOn ? f(t, "select_none", "Select none") : f(t, "select_all", "Select all")}
-              </button>
+              <div className={sectionTitle}>
+                {f(t, "report_columns", "Columns to include")}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button className="btn !py-1 !px-2 text-xs" onClick={resetOrder}>
+                  {f(t, "reset_order", "Reset order")}
+                </button>
+                <button
+                  className="btn !py-1 !px-2 text-xs"
+                  onClick={() => setCols(allColsOn ? new Set() : new Set(columns.map((c) => c.key)))}
+                >
+                  {allColsOn ? f(t, "select_none", "Select none") : f(t, "select_all", "Select all")}
+                </button>
+              </div>
             </div>
-            <div
-              className="grid grid-cols-2 sm:grid-cols-3 gap-x-2 max-h-[24vh] overflow-y-auto pr-1"
-              style={{ gridAutoFlow: "column", gridTemplateRows: `repeat(${colRows}, auto)` }}
+            <div className="text-xs text-muted">
+              {f(t, "report_drag_hint", "Drag a column to change where it prints — top of the list is the leftmost column.")}
+            </div>
+            <ul
+              className="space-y-1 max-h-[32vh] overflow-y-auto pr-1"
+              onDragOver={(e) => e.preventDefault()}
             >
-              {orderedColumns.map((c) => (
-                <label key={c.key} className={checkRow}>
-                  <input
-                    type="checkbox"
-                    className="w-auto"
-                    checked={cols.has(c.key)}
-                    onChange={() => toggleCol(c.key)}
-                  />
-                  <span className="truncate">{c.label}</span>
-                </label>
-              ))}
-            </div>
+              {orderedColumns.map((key, i) => {
+                const on = cols.has(key);
+                const printedAt = chosenCols.indexOf(key);
+                return (
+                  <li
+                    key={key}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragKey(key);
+                      e.dataTransfer.effectAllowed = "move";
+                      // Firefox refuses to start a drag without payload.
+                      e.dataTransfer.setData("text/plain", key);
+                    }}
+                    onDragEnd={() => {
+                      setDragKey(null);
+                      setOverKey(null);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragKey && dragKey !== key) setOverKey(key);
+                    }}
+                    onDragLeave={() => setOverKey((k) => (k === key ? null : k))}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const from = dragKey || e.dataTransfer.getData("text/plain");
+                      if (from) moveTo(from, key);
+                      setDragKey(null);
+                      setOverKey(null);
+                    }}
+                    className={`flex items-center gap-2 rounded-lg border px-2 py-1 text-sm bg-surface
+                      ${overKey === key ? "border-accent" : "border-line"}
+                      ${dragKey === key ? "opacity-50" : ""}`}
+                  >
+                    <span
+                      className="msr text-[18px] text-muted cursor-grab active:cursor-grabbing select-none"
+                      aria-hidden="true"
+                    >
+                      drag_indicator
+                    </span>
+                    <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-auto"
+                        checked={on}
+                        onChange={() => toggleCol(key)}
+                      />
+                      <span className={`truncate ${on ? "" : "text-muted"}`}>{labelOf(key)}</span>
+                    </label>
+                    {printedAt >= 0 && (
+                      <span className="text-xs text-muted shrink-0">{printedAt + 1}</span>
+                    )}
+                    <button
+                      className="btn !py-0.5 !px-1.5 text-xs shrink-0"
+                      onClick={() => nudge(key, -1)}
+                      disabled={i === 0}
+                      aria-label={f(t, "move_up", "Move up")}
+                      title={f(t, "move_up", "Move up")}
+                    >
+                      <span className="msr text-[16px]">arrow_upward</span>
+                    </button>
+                    <button
+                      className="btn !py-0.5 !px-1.5 text-xs shrink-0"
+                      onClick={() => nudge(key, 1)}
+                      disabled={i === orderedColumns.length - 1}
+                      aria-label={f(t, "move_down", "Move down")}
+                      title={f(t, "move_down", "Move down")}
+                    >
+                      <span className="msr text-[16px]">arrow_downward</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {chosenCols.length > 0 && (
+              <div className="text-xs text-muted truncate">
+                {f(t, "report_order", "Print order")}:{" "}
+                {chosenCols.map((k) => labelOf(k)).join(" › ")}
+              </div>
+            )}
             {tooWide && (
               <div className="text-xs text-danger">
                 {f(

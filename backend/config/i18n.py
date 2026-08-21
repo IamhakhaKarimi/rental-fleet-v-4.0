@@ -627,6 +627,7 @@ TRANSLATIONS = {
         # editing reuses the New Reservation dialog (v4.0)
         "review_step_hint_edit": "Güncellenen fatura önizlemesini kontrol edin, ardından bu rezervasyondaki değişiklikleri kaydedin.",
         "client_locked_hint":    "Müşteri bilgileri müşteri kaydına aittir — Müşteriler sayfasından düzenleyin.",
+        "extra_day_over_24h":    "İade saati tam 24 saatlik blokları aşıyor — {n} gün üzerinden faturalandırılıyor.",
         "cancel_reservation":    "Rezervasyonu İptal Et",
         "change_car":            "Aracı Değiştir",
         "keep_current_car":      "Mevcut aracı koru",
@@ -1276,6 +1277,7 @@ TRANSLATIONS = {
         # editing reuses the New Reservation dialog (v4.0)
         "review_step_hint_edit": "Check the updated invoice preview, then save the changes to this reservation.",
         "client_locked_hint":    "Client details belong to the customer record — edit them on the Customers page.",
+        "extra_day_over_24h":    "Return time is past a full 24h block — billing {n} days.",
         "cancel_reservation":    "Cancel Reservation",
         "change_car":            "Change Vehicle",
         "keep_current_car":      "Keep current vehicle",

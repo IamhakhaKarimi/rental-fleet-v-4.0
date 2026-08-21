@@ -488,10 +488,13 @@ export function BookingDialog({
               </div>
               {billedDayCount > days && (
                 <div className="text-[11px] text-warn mt-1">
+                  {/* {n} is filled here, not in the dict -- same pattern as
+                      password_min_chars / the license strings. The fallback
+                      carries the placeholder too, so both paths render. */}
                   {tf(
                     "extra_day_over_24h",
-                    `Return time is past a full 24h block — billing ${billedDayCount} days.`
-                  )}
+                    "Return time is past a full 24h block — billing {n} days."
+                  ).replace("{n}", String(billedDayCount))}
                 </div>
               )}
             </div>

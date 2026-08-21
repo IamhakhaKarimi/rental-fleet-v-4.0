@@ -619,6 +619,7 @@ UI = {
     # editing reuses the New Reservation dialog (v4.0)
     "review_step_hint_edit": "Kontrollo parapamjen e përditësuar të faturës, pastaj ruaj ndryshimet e këtij rezervimi.",
     "client_locked_hint":    "Të dhënat e klientit i përkasin regjistrit të klientit — modifikoji te faqja Klientët.",
+    "extra_day_over_24h":    "Ora e kthimit e kalon një bllok të plotë 24-orësh — po faturohen {n} ditë.",
     "cancel_reservation":    "Anulo rezervimin",
     "change_car":            "Ndrysho automjetin",
     "keep_current_car":      "Mbaj automjetin aktual",

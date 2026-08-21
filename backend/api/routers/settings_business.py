@@ -72,14 +72,21 @@ class _BytesUpload:
         return self._raw
 
 
+# An EUR->ALL rate has sat near 100 for years; this is a sanity ceiling to catch
+# a fat-fingered entry, not an exchange-rate policy.
+MAX_EUR_ALL_RATE = 100_000.0
+
+
 # ── Bodies ──────────────────────────────────────────────────────────────────
 class BusinessNameIn(BaseModel):
     name: str = ""
 
 
 class CurrencyIn(BaseModel):
+    # The rate is validated in the handler, not here, so a bad value comes back
+    # as the app's usual {"detail": ...} 400 rather than a pydantic 422 blob.
     currency: str = "EUR"
-    exchange_rate: float = 92
+    exchange_rate: float = float(app_cfg.DEFAULT_EUR_ALL_RATE)
 
 
 class ContactIn(BaseModel):
@@ -153,8 +160,14 @@ def set_currency(body: CurrencyIn,
     currency = (body.currency or "").strip().upper()
     if currency not in ("EUR", "ALL"):
         raise HTTPException(400, detail="fields_required")
+    # Reject a bad rate instead of letting set_eur_all_rate() quietly substitute
+    # the default -- the caller would otherwise get a success response while the
+    # stored rate silently reverted to 92.
+    rate = body.exchange_rate
+    if rate is None or rate != rate or rate <= 0 or rate > MAX_EUR_ALL_RATE:
+        raise HTTPException(400, detail="invalid_exchange_rate")
     app_cfg.set_currency(currency)
-    app_cfg.set_eur_all_rate(body.exchange_rate)
+    app_cfg.set_eur_all_rate(rate)
     audit_service.record(user, "edit_currency", "settings", "business_currency", currency)
     return {"currency": app_cfg.get_currency(), "exchange_rate": app_cfg.get_eur_all_rate()}
 

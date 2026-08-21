@@ -12,7 +12,7 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 
 /**
  * recharts charts for the Finance page, isolated into a client-only module.
@@ -40,9 +40,13 @@ const PIE_PALETTE = [
   "#BE185D",
 ];
 
-// Recharts values arrive in euros; render them as the app's money format.
-function ChartTooltipFmt(value: any) {
-  return formatEur(Math.round(Number(value) * 100));
+// Recharts values arrive in euros; render them as the app's money format. This
+// is a hook rather than a plain function because the format depends on the
+// business display currency. Tooltips only -- the axis ticks stay bare numbers,
+// a dual-currency string would not fit them.
+function useChartTooltipFmt() {
+  const fmt = useMoney();
+  return (value: any) => fmt(Math.round(Number(value) * 100));
 }
 
 const TOOLTIP_STYLE = { borderRadius: 10, border: "1px solid #EAE8E3", fontSize: 12 } as const;
@@ -77,6 +81,7 @@ export function IncomeCostBarChart({
   currentLabel?: string;
 }) {
   const lastPeriod = data.length ? data[data.length - 1].period : undefined;
+  const chartTooltipFmt = useChartTooltipFmt();
   return (
     <ResponsiveContainer width="100%" height={300}>
       <BarChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
@@ -87,7 +92,7 @@ export function IncomeCostBarChart({
           tickFormatter={xTickFormatter}
         />
         <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" width={48} />
-        <Tooltip formatter={ChartTooltipFmt} contentStyle={TOOLTIP_STYLE} />
+        <Tooltip formatter={chartTooltipFmt} contentStyle={TOOLTIP_STYLE} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         {currentLabel && lastPeriod && (
           <ReferenceLine
@@ -110,6 +115,7 @@ export interface PieDatum {
 }
 
 export function IncomeSharePieChart({ pie }: { pie: PieDatum[] }) {
+  const chartTooltipFmt = useChartTooltipFmt();
   return (
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
@@ -118,7 +124,7 @@ export function IncomeSharePieChart({ pie }: { pie: PieDatum[] }) {
             <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
           ))}
         </Pie>
-        <Tooltip formatter={ChartTooltipFmt} contentStyle={TOOLTIP_STYLE} />
+        <Tooltip formatter={chartTooltipFmt} contentStyle={TOOLTIP_STYLE} />
         <Legend wrapperStyle={{ fontSize: 11 }} />
       </PieChart>
     </ResponsiveContainer>

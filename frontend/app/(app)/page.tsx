@@ -4,7 +4,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can } from "@/lib/perms";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { usePolling } from "@/lib/usePolling";
 import { Timeline } from "@/components/Timeline";
 import { NightModeToggle } from "@/components/NightModeToggle";
@@ -33,6 +33,7 @@ const daysBetweenISO = (a: string, b: string) => {
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const fmt = useMoney();
   const t = useT();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
   const [counts, setCounts] = useState<FleetCounts | null>(null);
@@ -144,7 +145,7 @@ export default function DashboardPage() {
               <span className="msr text-[16px] text-muted">sell</span>
               <span className="text-xs text-muted">{tf("from", "from")}</span>
               <span className="font-display font-bold text-base text-accent">
-                {formatEur(v.base_daily_rate)}
+                {fmt(v.base_daily_rate)}
               </span>
             </span>
             <span className="text-[0.6rem] uppercase text-muted tracking-wide">
@@ -311,7 +312,7 @@ export default function DashboardPage() {
                   {featured.year ? ` · ${featured.year}` : ""}
                 </div>
                 <div className="font-bold text-accent mt-0.5">
-                  {formatEur(featured.base_daily_rate)}{" "}
+                  {fmt(featured.base_daily_rate)}{" "}
                   <span className="text-xs text-muted font-normal">/ day</span>
                 </div>
               </div>
@@ -437,7 +438,7 @@ export default function DashboardPage() {
               badge={<StatusBadge status={v.status} />}
               fields={[
                 { label: t("col_plate"), value: v.license_plate || "—" },
-                { label: t("col_rate"), value: formatEur(v.base_daily_rate) },
+                { label: t("col_rate"), value: fmt(v.base_daily_rate) },
                 { label: t("col_year"), value: v.year || "—" },
                 { label: t("col_color"), value: v.color || "—" },
               ]}
@@ -470,7 +471,7 @@ export default function DashboardPage() {
                   <td className="p-2.5">
                     <StatusBadge status={v.status} />
                   </td>
-                  <td className="p-2.5 text-right font-medium">{formatEur(v.base_daily_rate)}</td>
+                  <td className="p-2.5 text-right font-medium">{fmt(v.base_daily_rate)}</td>
                 </tr>
               ))}
             </tbody>

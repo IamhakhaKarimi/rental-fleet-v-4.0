@@ -1,8 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
-import { formatMoneyDisplay } from "@/lib/money";
-import { useCurrency } from "@/lib/currency";
+import { useMoney } from "@/lib/currency";
 import { formatDisplay } from "@/lib/dates";
 import type { BusinessInfo } from "@/lib/types";
 
@@ -68,8 +67,7 @@ export interface InvoicePreviewData {
 
 export function InvoicePreview({ data }: { data: InvoicePreviewData }) {
   const T = useInvoiceDict(data.invoiceLang || "tr");
-  const { currency, exchangeRate } = useCurrency();
-  const fmt = (cents: number) => formatMoneyDisplay(cents, currency, exchangeRate);
+  const fmt = useMoney();
 
   const subtotal = Math.max(0, data.days) * Math.max(0, data.dailyRateEuros) * 100;
   const deposit = Math.max(0, data.depositEuros) * 100;

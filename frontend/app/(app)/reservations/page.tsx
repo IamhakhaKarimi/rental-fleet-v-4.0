@@ -6,13 +6,12 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { usePolling } from "@/lib/usePolling";
 import { can } from "@/lib/perms";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { Modal } from "@/components/Modal";
 import { Timeline } from "@/components/Timeline";
 import { BookingDialog } from "@/components/BookingDialog";
 import {
   ReservationCard,
-  EditReservationForm,
   ManageReturnForm,
   type ActiveRental,
 } from "@/components/ReservationCard";
@@ -25,6 +24,7 @@ import { SwipeDeck } from "@/components/SwipeCard";
 type TLRange = "week" | "month" | "two_month" | "all_months";
 
 export default function ReservationsPage() {
+  const fmt = useMoney();
   const { t, lang } = useI18n();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
   const { user } = useAuth();
@@ -32,6 +32,9 @@ export default function ReservationsPage() {
   const [rentals, setRentals] = useState<ActiveRental[]>([]);
   const [booking, setBooking] = useState(false);
   const [bookingStep, setBookingStep] = useState<string>("period");
+  // The edit dialog is the booking dialog, so it needs its own step state to
+  // size its modal the same way.
+  const [editStep, setEditStep] = useState<string>("period");
   const [exporting, setExporting] = useState(false);
   const [range, setRange] = useState<TLRange>("week");
   const [busy, setBusy] = useState(false);
@@ -189,7 +192,7 @@ export default function ReservationsPage() {
                       {fmtDay(r.start_dt)} → {fmtDay(r.end_dt)}
                     </td>
                     <td className="p-2.5 text-right text-muted">{r.rental_days}</td>
-                    <td className="p-2.5 text-right font-medium">{formatEur(r.total_amount)}</td>
+                    <td className="p-2.5 text-right font-medium">{fmt(r.total_amount)}</td>
                     <td className="p-2.5">
                       <StatusBadge status={r.status} />
                     </td>
@@ -238,13 +241,33 @@ export default function ReservationsPage() {
         <Timeline />
       </section>
 
+      {/* Editing reuses the New Reservation dialog verbatim — same steps, same
+          period band, same live invoice preview — just prefilled from the
+          booking, so there is only one shape of "a rental" to learn. */}
       {edit && (
         <Modal
           title={`${tf("edit_reservation", "Edit Reservation")} · ${edit.client_name}`}
-          onClose={() => setEdit(null)}
-          wide
+          onClose={() => {
+            setEdit(null);
+            setEditStep("period");
+          }}
+          size={editStep === "review" ? "full" : "compact"}
+          fullHeight
+          bodyClassName="!mt-[10px] !mb-[10px] !px-[50px] !py-[10px]"
         >
-          <EditReservationForm rental={edit} onChange={load} onClose={() => setEdit(null)} />
+          <BookingDialog
+            editRental={edit}
+            onClose={() => {
+              setEdit(null);
+              setEditStep("period");
+            }}
+            onCreated={() => {
+              load();
+              setEdit(null);
+              setEditStep("period");
+            }}
+            onStepChange={setEditStep}
+          />
         </Modal>
       )}
 

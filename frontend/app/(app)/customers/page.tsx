@@ -7,8 +7,7 @@ import { useToast } from "@/lib/toast";
 import { usePolling } from "@/lib/usePolling";
 import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can, roleLevel } from "@/lib/perms";
-import { formatMoneyDisplay } from "@/lib/money";
-import { useCurrency } from "@/lib/currency";
+import { useMoney } from "@/lib/currency";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RefreshIcon } from "@/components/RefreshIcon";
@@ -150,8 +149,7 @@ function CustomerDialog({
   const { user } = useAuth();
   const toast = useToast();
   const { requestDelete, isPending } = useDeleteUndo();
-  const { currency, exchangeRate } = useCurrency();
-  const fmt = (cents: number) => formatMoneyDisplay(cents, currency, exchangeRate);
+  const fmt = useMoney();
 
   const canEdit = can(user, "service_vehicle");
   const canReassign = can(user, "edit_business_settings") || can(user, "manage_users");
@@ -844,7 +842,7 @@ export default function CustomersPage() {
   const { user } = useAuth();
   const toast = useToast();
   const { requestDelete, isPending } = useDeleteUndo();
-  const { currency, exchangeRate } = useCurrency();
+  const fmt = useMoney();
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<CustomerRow | null>(null);
@@ -1089,7 +1087,7 @@ export default function CustomersPage() {
                 </SwipeField>
                 <SwipeField label={f(t, "last_rate", "Last rate")}>
                   <div className="swipe-val">
-                    {formatMoneyDisplay(c.last_daily_rate, currency, exchangeRate)}
+                    {fmt(c.last_daily_rate)}
                     <span className="text-muted font-normal">/{f(t, "day", "day")}</span>
                   </div>
                 </SwipeField>

@@ -532,6 +532,7 @@ TRANSLATIONS = {
         "currency_label":        "Görüntüleme Para Birimi",
         "currency_rate_label":   "Kur (1 EUR = ? ALL)",
         "currency_help":         "Tutarlar her zaman EUR (avro) olarak saklanır; bu, ekranda hangi para biriminin gösterileceğini belirler.",
+        "invalid_exchange_rate": "Kur 0'dan büyük geçerli bir sayı olmalıdır.",
         "invoice_quick_links":   "Hızlı Bağlantılar — Tara",
         "qr_pay":                "Bakiyeyi öde",
         "qr_whatsapp":           "WhatsApp ile yaz",
@@ -623,6 +624,9 @@ TRANSLATIONS = {
         "reset_clients_help":    "Tüm müşterileri, kiralamalarını ve bunlara ait tahsilatları siler. Araçlar korunur ve müsait yapılır.",
         # edit reservation + finance reports / month drill-down (v3.1)
         "edit_reservation":      "Rezervasyonu Düzenle",
+        # editing reuses the New Reservation dialog (v4.0)
+        "review_step_hint_edit": "Güncellenen fatura önizlemesini kontrol edin, ardından bu rezervasyondaki değişiklikleri kaydedin.",
+        "client_locked_hint":    "Müşteri bilgileri müşteri kaydına aittir — Müşteriler sayfasından düzenleyin.",
         "cancel_reservation":    "Rezervasyonu İptal Et",
         "change_car":            "Aracı Değiştir",
         "keep_current_car":      "Mevcut aracı koru",
@@ -1177,6 +1181,7 @@ TRANSLATIONS = {
         "currency_label":        "Display Currency",
         "currency_rate_label":   "Exchange rate (1 EUR = ? ALL)",
         "currency_help":         "Amounts are always stored in EUR; this only controls which currency is shown.",
+        "invalid_exchange_rate": "The exchange rate must be a valid number greater than 0.",
         "invoice_quick_links":   "Quick Links — Scan",
         "qr_pay":                "Pay the balance",
         "qr_whatsapp":           "WhatsApp us",
@@ -1268,6 +1273,9 @@ TRANSLATIONS = {
         "reset_clients_help":    "Deletes every customer with their rentals and the charges on them. Vehicles are kept and freed back to Available.",
         # edit reservation + finance reports / month drill-down (v3.1)
         "edit_reservation":      "Edit Reservation",
+        # editing reuses the New Reservation dialog (v4.0)
+        "review_step_hint_edit": "Check the updated invoice preview, then save the changes to this reservation.",
+        "client_locked_hint":    "Client details belong to the customer record — edit them on the Customers page.",
         "cancel_reservation":    "Cancel Reservation",
         "change_car":            "Change Vehicle",
         "keep_current_car":      "Keep current vehicle",

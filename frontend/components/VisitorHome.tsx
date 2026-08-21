@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useT } from "@/lib/i18n";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { NightModeToggle } from "@/components/NightModeToggle";
 import type { FleetCounts, Vehicle } from "@/lib/types";
 
@@ -23,6 +23,7 @@ const f = (t: (k: string) => string, key: string, fb: string) => (t(key) === key
  * 2×2, the newest car is a wide feature) so it reads as a board, not a card grid.
  */
 export function VisitorHome() {
+  const fmt = useMoney();
   const t = useT();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [counts, setCounts] = useState<FleetCounts | null>(null);
@@ -67,7 +68,7 @@ export function VisitorHome() {
           {v.color ? ` · ${v.color}` : ""}
         </div>
         <div className={`${wide ? "mt-2" : "mt-auto pt-2"} font-bold text-accent ${wide ? "text-lg" : ""}`}>
-          {formatEur(v.base_daily_rate)}{" "}
+          {fmt(v.base_daily_rate)}{" "}
           <span className="text-xs text-muted font-normal">/ {f(t, "per_day", "day")}</span>
         </div>
       </div>

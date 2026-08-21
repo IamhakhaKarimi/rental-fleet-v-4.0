@@ -22,7 +22,8 @@ from config.settings import (APP_NAME, APP_TAGLINE, APP_VERSION, BASE_DIR,
                              LANGUAGES)
 from config.terms import rental_terms
 from services.scheduling_service import return_state
-from ui.components import fmt_date, fmt_invoice_no, format_eur, format_invoice_money
+from data.repositories import app_settings as app_cfg
+from ui.components import fmt_date, fmt_invoice_no, format_eur, format_money_display
 from ui import invoice_links
 
 # First existing (regular, bold) pair wins. The DejaVu pair BUNDLED with the repo
@@ -257,7 +258,17 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
         y = pdf.get_y() + 4
 
         # ── line items ────────────────────────────────────────────────────────
-        w_desc, w_qty, w_unit, w_amt = 90, 25, 32, 33
+        # The money columns have to hold whatever format_money_display emits. In
+        # EUR that is at most "€3,000" (~15mm); with the display currency set to
+        # ALL it becomes "€1,200 (110,400 L)" -- 33.9mm at 10pt DejaVuSans, which
+        # overflows the 33mm EUR column. fpdf does not clip an over-wide cell, it
+        # bleeds the text left over the neighbouring column, so the two money
+        # columns are widened out of the slack in desc/qty. The row still totals
+        # 180mm, keeping the right edge on the 195mm page margin either way.
+        if app_cfg.get_currency() == "ALL":
+            w_desc, w_qty, w_unit, w_amt = 76, 16, 44, 44
+        else:
+            w_desc, w_qty, w_unit, w_amt = 90, 25, 32, 33
         pdf.set_xy(L, y)
         pdf.set_font(F, "B", 8)
         pdf.set_text_color(*_MUTED)
@@ -276,7 +287,7 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
             pdf.cell(w_desc, 7, text=label, border="B")
             pdf.cell(w_qty, 7, text=qty, align="R", border="B")
             pdf.cell(w_unit, 7, text=unit, align="R", border="B")
-            pdf.cell(w_amt, 7, text=format_invoice_money(amount), align="R", border="B",
+            pdf.cell(w_amt, 7, text=format_money_display(amount), align="R", border="B",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         pdf.set_draw_color(*_LIGHT)
@@ -285,31 +296,33 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
                 ctype = c["type"]
                 label = T(_LINE_LABEL.get(ctype, ctype))
                 if ctype == "rental":
-                    _item(label, str(days), format_invoice_money(daily_rate), c["amount"])
+                    _item(label, str(days), format_money_display(daily_rate), c["amount"])
                 else:
-                    _item(label, "1", format_invoice_money(c["amount"]), c["amount"])
+                    _item(label, "1", format_money_display(c["amount"]), c["amount"])
         else:
-            _item(T("invoice_line_rental"), str(days), format_invoice_money(daily_rate), grand_total)
+            _item(T("invoice_line_rental"), str(days), format_money_display(daily_rate), grand_total)
 
         # ── totals (right aligned) ──────────────────────────────────────────────
-        # Wide enough for the dual-currency string format_invoice_money can produce
-        # when the display currency is ALL (e.g. "€1,600 (152,800 L)") at the bold
-        # 13pt grand-total size — same right edge (tot_x + tot_lbl + tot_val = 195,
-        # the page margin), just using more of the row's otherwise-blank width.
         y2 = pdf.get_y() + 3
-        tot_x = 85
-        tot_lbl, tot_val = 55, 55
+        # Same right edge either way (tot_x + tot_lbl + tot_val = 195, the page
+        # margin); ALL just borrows more of the row's otherwise-blank left half,
+        # because "€50,000 (4,600,000 L)" is 57mm at the bold 13pt grand-total
+        # size and would overflow the 55mm EUR column.
+        if app_cfg.get_currency() == "ALL":
+            tot_x, tot_lbl, tot_val = 75, 55, 65
+        else:
+            tot_x, tot_lbl, tot_val = 85, 55, 55
         pdf.set_xy(tot_x, y2)
         pdf.set_font(F, "", 10)
         pdf.set_text_color(*_TEXT)
         pdf.cell(tot_lbl, 6, text=T("invoice_subtotal"))
-        pdf.cell(tot_val, 6, text=format_invoice_money(grand_total), align="R",
+        pdf.cell(tot_val, 6, text=format_money_display(grand_total), align="R",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         if deposit > 0:
             pdf.set_x(tot_x)
             pdf.set_text_color(*_MUTED)
             pdf.cell(tot_lbl, 6, text=f'- {T("invoice_line_deposit")}')
-            pdf.cell(tot_val, 6, text=f'- {format_invoice_money(deposit)}', align="R",
+            pdf.cell(tot_val, 6, text=f'- {format_money_display(deposit)}', align="R",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_x(tot_x)
         pdf.set_draw_color(*_TEXT)
@@ -320,7 +333,7 @@ def build_invoice_pdf(deal: dict, charges: list[dict], business_name: str,
         pdf.set_text_color(*_TEXT)
         pdf.cell(tot_lbl, 9, text=T("invoice_total"))
         pdf.set_text_color(*_ACCENT)
-        pdf.cell(tot_val, 9, text=format_invoice_money(balance_due), align="R",
+        pdf.cell(tot_val, 9, text=format_money_display(balance_due), align="R",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # signed / unsigned
@@ -839,7 +852,6 @@ def build_license_invoice_pdf(d: dict) -> bytes:
     pdf, F = _new_pdf()
     L, R = 15, 195
     right_x = 120
-    from data.repositories import app_settings as app_cfg
     logo = app_cfg.get_logo()
     seal = app_cfg.get_stamp() or logo   # signature seal: stamp preferred, else logo
 

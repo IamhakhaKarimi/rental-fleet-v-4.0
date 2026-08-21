@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { DateField } from "@/components/DateField";
 import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 import { useDeleteUndo } from "@/lib/deleteUndo";
@@ -156,6 +156,7 @@ function validateLedgerEntry(vehicleId: string, amount: number, note: string): s
 }
 
 export default function FinancePage() {
+  const fmt = useMoney();
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
@@ -279,7 +280,7 @@ export default function FinancePage() {
           </div>
           <div>
             <div className="text-4xl font-bold leading-none" style={{ fontVariantNumeric: "tabular-nums" }}>
-              {formatEur(summary?.net ?? 0)}
+              {fmt(summary?.net ?? 0)}
             </div>
             <div
               className="mt-4 h-2 rounded-full overflow-hidden"
@@ -309,7 +310,7 @@ export default function FinancePage() {
             {tx("total_revenue", "Total Revenue")}
           </div>
           <div className="text-2xl font-bold text-accent mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {formatEur(summary?.income ?? 0)}
+            {fmt(summary?.income ?? 0)}
           </div>
         </div>
 
@@ -323,7 +324,7 @@ export default function FinancePage() {
             {tx("col_cost", "Total Cost")}
           </div>
           <div className="text-2xl font-bold text-ink mt-1" style={{ fontVariantNumeric: "tabular-nums" }}>
-            {formatEur(summary?.cost ?? 0)}
+            {fmt(summary?.cost ?? 0)}
           </div>
         </div>
 
@@ -346,7 +347,7 @@ export default function FinancePage() {
                 className="text-base font-bold text-ink truncate"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
-                {formatEur(it.v)}
+                {fmt(it.v)}
               </div>
             </div>
           ))}
@@ -466,6 +467,7 @@ function OverviewTab({
   tx: (k: string, f: string) => string;
   reportButtons: React.ReactNode;
 }) {
+  const fmt = useMoney();
   const totalCost = costByType.reduce((s, r) => s + (r.amount || 0), 0);
   return (
     <div className="space-y-4">
@@ -479,25 +481,25 @@ function OverviewTab({
             <tr className="border-b border-line">
               <Td>{tx("rental_revenue", "Rental")}</Td>
               <Td right bold>
-                {formatEur(revenue?.rental ?? 0)}
+                {fmt(revenue?.rental ?? 0)}
               </Td>
             </tr>
             <tr className="border-b border-line">
               <Td>{tx("penalty_revenue", "Overdue Penalty")}</Td>
               <Td right bold>
-                {formatEur(revenue?.penalty ?? 0)}
+                {fmt(revenue?.penalty ?? 0)}
               </Td>
             </tr>
             <tr className="border-b border-line">
               <Td>{tx("damage_revenue", "Damage")}</Td>
               <Td right bold>
-                {formatEur(revenue?.damage ?? 0)}
+                {fmt(revenue?.damage ?? 0)}
               </Td>
             </tr>
             <tr>
               <Td bold>{tx("fin_totals", "Total")}</Td>
               <Td right bold>
-                {formatEur(revenue?.total ?? 0)}
+                {fmt(revenue?.total ?? 0)}
               </Td>
             </tr>
           </tbody>
@@ -519,14 +521,14 @@ function OverviewTab({
             {costByType.map((r) => (
               <tr key={r.type} className="border-b border-line last:border-0">
                 <Td>{costLabel(r.type)}</Td>
-                <Td right>{formatEur(r.amount)}</Td>
+                <Td right>{fmt(r.amount)}</Td>
               </tr>
             ))}
             {costByType.length > 0 && (
               <tr>
                 <Td bold>{tx("fin_totals", "Total")}</Td>
                 <Td right bold>
-                  {formatEur(totalCost)}
+                  {fmt(totalCost)}
                 </Td>
               </tr>
             )}
@@ -556,6 +558,7 @@ function PnlTable({
   tx: (k: string, f: string) => string;
   periodLabel: string;
 }) {
+  const fmt = useMoney();
   const totals = useMemo(() => pnlTotals(rows), [rows]);
   return (
     <div className="card p-5 overflow-x-auto">
@@ -573,10 +576,10 @@ function PnlTable({
           {rows.map((r) => (
             <tr key={r.period} className="border-b border-line last:border-0">
               <Td>{r.period}</Td>
-              <Td right>{formatEur(r.income)}</Td>
-              <Td right>{formatEur(r.cost)}</Td>
+              <Td right>{fmt(r.income)}</Td>
+              <Td right>{fmt(r.cost)}</Td>
               <Td right bold>
-                <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{formatEur(r.net)}</span>
+                <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{fmt(r.net)}</span>
               </Td>
             </tr>
           ))}
@@ -584,14 +587,14 @@ function PnlTable({
             <tr className="border-t-2 border-line">
               <Td bold>{tx("fin_totals", "Total")}</Td>
               <Td right bold>
-                {formatEur(totals.income)}
+                {fmt(totals.income)}
               </Td>
               <Td right bold>
-                {formatEur(totals.cost)}
+                {fmt(totals.cost)}
               </Td>
               <Td right bold>
                 <span className={totals.net >= 0 ? "text-accent" : "text-danger"}>
-                  {formatEur(totals.net)}
+                  {fmt(totals.net)}
                 </span>
               </Td>
             </tr>
@@ -730,6 +733,7 @@ function MonthlyDashboard({
   userName: string;
   reportButtons: React.ReactNode;
 }) {
+  const fmt = useMoney();
   const data = useMemo(
     () =>
       rows.map((r) => ({
@@ -770,7 +774,7 @@ function MonthlyDashboard({
           tone="purple"
           icon="account_balance_wallet"
           label={tx("col_income", "Income")}
-          value={formatEur(totals.income)}
+          value={fmt(totals.income)}
           trend={trendOf(rows, "income")}
           goodDirectionUp
         />
@@ -778,7 +782,7 @@ function MonthlyDashboard({
           tone="pink"
           icon="credit_card"
           label={tx("col_cost", "Cost")}
-          value={formatEur(totals.cost)}
+          value={fmt(totals.cost)}
           trend={trendOf(rows, "cost")}
           goodDirectionUp={false}
         />
@@ -786,7 +790,7 @@ function MonthlyDashboard({
           tone="blue"
           icon="account_balance"
           label={tx("col_net", "Net")}
-          value={formatEur(totals.net)}
+          value={fmt(totals.net)}
           trend={trendOf(rows, "net")}
           goodDirectionUp
         />
@@ -842,6 +846,7 @@ function VehicleTab({
   tx: (k: string, f: string) => string;
   reportButtons: React.ReactNode;
 }) {
+  const fmt = useMoney();
   const pie = useMemo(
     () =>
       rows
@@ -880,10 +885,10 @@ function VehicleTab({
                   <span className="font-medium">{r.make_model || "—"}</span>
                   <span className="text-xs text-muted ml-1">{r.vehicle_id}</span>
                 </Td>
-                <Td right>{formatEur(r.income)}</Td>
-                <Td right>{formatEur(r.cost)}</Td>
+                <Td right>{fmt(r.income)}</Td>
+                <Td right>{fmt(r.cost)}</Td>
                 <Td right bold>
-                  <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{formatEur(r.net)}</span>
+                  <span className={r.net >= 0 ? "text-accent" : "text-danger"}>{fmt(r.net)}</span>
                 </Td>
               </tr>
             ))}
@@ -905,6 +910,7 @@ function CustomerTab({
   tx: (k: string, f: string) => string;
   reportButtons: React.ReactNode;
 }) {
+  const fmt = useMoney();
   return (
     <div className="card p-5 overflow-x-auto">
       <div className="flex items-center justify-between gap-2 mb-3">
@@ -929,10 +935,10 @@ function CustomerTab({
               <Td bold>{r.full_name}</Td>
               <Td>{r.phone || "—"}</Td>
               <Td right>{r.rentals}</Td>
-              <Td right>{formatEur(r.damage)}</Td>
-              <Td right>{formatEur(r.penalty)}</Td>
+              <Td right>{fmt(r.damage)}</Td>
+              <Td right>{fmt(r.penalty)}</Td>
               <Td right bold>
-                {formatEur(r.revenue)}
+                {fmt(r.revenue)}
               </Td>
             </tr>
           ))}
@@ -958,6 +964,7 @@ function CostsTab({
   onChanged: () => void;
   reportButtons: React.ReactNode;
 }) {
+  const fmt = useMoney();
   const toast = useToast();
   const { requestDelete } = useDeleteUndo();
   const today = new Date().toISOString().slice(0, 10);
@@ -1037,7 +1044,7 @@ function CostsTab({
   function del(c: CostRow) {
     requestDelete({
       title: tx("delete_btn", "Delete"),
-      message: `${tx("delete_btn", "Delete")}? ${costLabel(c.type)} · ${formatEur(c.amount)}`,
+      message: `${tx("delete_btn", "Delete")}? ${costLabel(c.type)} · ${fmt(c.amount)}`,
       onRemove: () => setPendingDeleteIds((prev) => new Set(prev).add(c.cost_id)),
       onRestore: () =>
         setPendingDeleteIds((prev) => {
@@ -1168,7 +1175,7 @@ function CostsTab({
                 <Td>{costLabel(c.type)}</Td>
                 <Td>{c.note || "—"}</Td>
                 <Td right bold>
-                  {formatEur(c.amount)}
+                  {fmt(c.amount)}
                 </Td>
                 <Td right>
                   <div className="flex items-center justify-end gap-1.5">
@@ -1216,6 +1223,7 @@ function CompensationTab({
   tx: (k: string, f: string) => string;
   onChanged: () => void;
 }) {
+  const fmt = useMoney();
   const toast = useToast();
   const { requestDelete } = useDeleteUndo();
   const today = new Date().toISOString().slice(0, 10);
@@ -1294,7 +1302,7 @@ function CompensationTab({
   function del(c: CompensationRow) {
     requestDelete({
       title: tx("delete_btn", "Delete"),
-      message: `${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${formatEur(c.amount)}`,
+      message: `${tx("delete_btn", "Delete")}? ${compLabel(c.type)} · ${fmt(c.amount)}`,
       onRemove: () => setPendingDeleteIds((prev) => new Set(prev).add(c.charge_id)),
       onRestore: () =>
         setPendingDeleteIds((prev) => {
@@ -1426,7 +1434,7 @@ function CompensationTab({
                 <Td>{compLabel(c.type)}</Td>
                 <Td>{c.note || "—"}</Td>
                 <Td right bold>
-                  {formatEur(c.amount)}
+                  {fmt(c.amount)}
                 </Td>
                 <Td right>
                   <div className="flex items-center justify-end gap-1.5">

@@ -7,8 +7,7 @@ import { useToast } from "@/lib/toast";
 import { usePolling } from "@/lib/usePolling";
 import { useResponsiveView } from "@/lib/useResponsiveView";
 import { can } from "@/lib/perms";
-import { formatMoneyDisplay } from "@/lib/money";
-import { useCurrency } from "@/lib/currency";
+import { useMoney } from "@/lib/currency";
 import { useDeleteUndo } from "@/lib/deleteUndo";
 import { Modal } from "@/components/Modal";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -263,7 +262,7 @@ export default function FleetPage() {
   const { requestDelete } = useDeleteUndo();
   const tf = (k: string, fb: string) => (t(k) === k ? fb : t(k));
   const { user } = useAuth();
-  const { currency, exchangeRate } = useCurrency();
+  const fmt = useMoney();
   const [vehicles, setVehicles] = useState<V[]>([]);
   const [q, setQ] = useState("");
   const [adding, setAdding] = useState(false);
@@ -581,7 +580,7 @@ export default function FleetPage() {
                       <span className="msr text-[16px] text-muted">sell</span>
                       <span className="text-xs text-muted">{tf("from", "from")}</span>
                       <span className="font-display font-bold text-base text-accent">
-                        {formatMoneyDisplay(v.base_daily_rate, currency, exchangeRate)}
+                        {fmt(v.base_daily_rate)}
                       </span>
                     </span>
                     <span className="text-[0.6rem] uppercase text-muted tracking-wide">
@@ -632,7 +631,7 @@ export default function FleetPage() {
                       )}
                     </div>
                   </td>
-                  <td className="p-2.5 text-right font-medium">{formatMoneyDisplay(v.base_daily_rate, currency, exchangeRate)}</td>
+                  <td className="p-2.5 text-right font-medium">{fmt(v.base_daily_rate)}</td>
                   {(canEdit || canFleet) && (
                     <td className="p-2.5">
                       <div className="flex justify-end">{renderActions(v)}</div>

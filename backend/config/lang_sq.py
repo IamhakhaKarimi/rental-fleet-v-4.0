@@ -524,6 +524,7 @@ UI = {
     "currency_label":        "Monedha e shfaqjes",
     "currency_rate_label":   "Kursi (1 EUR = ? ALL)",
     "currency_help":         "Shumat ruhen gjithmonë në EUR; kjo kontrollon vetëm cila monedhë shfaqet.",
+    "invalid_exchange_rate": "Kursi i këmbimit duhet të jetë një numër i vlefshëm më i madh se 0.",
     "invoice_quick_links":   "Lidhje të shpejta — Skano",
     "qr_pay":                "Paguaj bilancin",
     "qr_whatsapp":           "Na shkruaj në WhatsApp",
@@ -615,6 +616,9 @@ UI = {
     "reset_clients_help":    "Fshin çdo klient me qiratë e tij dhe tarifat përkatëse. Automjetet ruhen dhe lirohen si të disponueshme.",
     # edit reservation + finance reports / month drill-down (v3.1)
     "edit_reservation":      "Modifiko rezervimin",
+    # editing reuses the New Reservation dialog (v4.0)
+    "review_step_hint_edit": "Kontrollo parapamjen e përditësuar të faturës, pastaj ruaj ndryshimet e këtij rezervimi.",
+    "client_locked_hint":    "Të dhënat e klientit i përkasin regjistrit të klientit — modifikoji te faqja Klientët.",
     "cancel_reservation":    "Anulo rezervimin",
     "change_car":            "Ndrysho automjetin",
     "keep_current_car":      "Mbaj automjetin aktual",

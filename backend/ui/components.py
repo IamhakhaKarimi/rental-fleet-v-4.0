@@ -25,16 +25,20 @@ def format_eur(cents: int) -> str:
     return f"{sign}{CURRENCY_SYMBOL}{body}"
 
 
-def format_invoice_money(cents: int) -> str:
+def format_money_display(cents: int) -> str:
     """EUR amount, with a rounded Lek equivalent appended when the business
     display currency is set to ALL (e.g. '€30 (2,760 L)'). Storage stays EUR
-    cents everywhere; this is display-only, for the invoice/QR builders
-    (ui/invoice.py, ui/pdf.py, ui/invoice_links.py) -- NOT format_eur's other
-    callers (Finance, customer/finance reports), which stay EUR-only."""
+    cents everywhere -- this is purely a display concern.
+
+    This is the app-wide money formatter: every surface a user reads money on
+    (invoices, QR captions, the finance and customer reports) goes through it,
+    so the display-currency setting means the same thing everywhere. `format_eur`
+    remains the raw EUR primitive underneath it."""
     eur = format_eur(cents)
-    if app_cfg.get_currency() != "ALL":
+    # Nothing to convert, and "€0 (0 L)" is just noise.
+    if app_cfg.get_currency() != "ALL" or not cents:
         return eur
-    lek = round((cents or 0) / 100 * app_cfg.get_eur_all_rate())
+    lek = round(cents / 100 * app_cfg.get_eur_all_rate())
     return f"{eur} ({lek:,} L)"
 
 

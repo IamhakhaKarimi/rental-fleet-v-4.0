@@ -19,7 +19,7 @@ import urllib.parse
 import segno
 
 from data.repositories import app_settings as app_cfg
-from ui.components import format_invoice_money as _eur
+from ui.components import format_money_display as _eur
 
 
 def qr_png_bytes(payload: str, scale: int = 4, border: int = 2) -> bytes:

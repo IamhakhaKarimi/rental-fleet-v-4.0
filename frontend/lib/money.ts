@@ -20,11 +20,13 @@ export function toCents(euros: number): number {
 }
 
 /**
- * EUR amount, with a rounded Lek equivalent appended when the business
- * display currency is set to ALL (e.g. "€30 (2,760 L)"). Storage stays EUR
- * cents everywhere; this is display-only, for Fleet/Invoice/Customer money
- * -- NOT formatEur's other callers (Finance, Reservations, Dashboard), which
- * stay EUR-only.
+ * EUR amount, with a rounded Lek equivalent appended when the business display
+ * currency is set to ALL (e.g. "€30 (2,760 L)"). Storage stays EUR cents
+ * everywhere -- this is purely a display concern.
+ *
+ * Exact port of ui/components.format_money_display. Prefer the `useMoney()` hook
+ * in lib/currency.tsx, which binds the current setting for you; call this
+ * directly only where hooks are unavailable.
  */
 export function formatMoneyDisplay(
   cents: number | null | undefined,
@@ -32,7 +34,8 @@ export function formatMoneyDisplay(
   rate: number
 ): string {
   const eur = formatEur(cents);
-  if (currency !== "ALL") return eur;
-  const lek = Math.round(((cents || 0) / 100) * rate);
+  // Nothing to convert, and "€0 (0 L)" is just noise.
+  if (currency !== "ALL" || !cents) return eur;
+  const lek = Math.round((cents / 100) * rate);
   return `${eur} (${lek.toLocaleString("en-US")} L)`;
 }

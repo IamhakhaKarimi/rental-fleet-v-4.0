@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { useIsDesktop } from "@/lib/useMediaQuery";
 import { Modal } from "./Modal";
 
@@ -55,6 +55,7 @@ const digits = (s?: string) => (s || "").replace(/\D/g, "");
  * Bars are clickable -> a rental-details modal with a WhatsApp shortcut.
  */
 export function Timeline() {
+  const money = useMoney();
   const { t, lang } = useI18n();
   const isDesktop = useIsDesktop();
   const LABEL_W = isDesktop ? LABEL_W_DESKTOP : LABEL_W_NARROW;
@@ -406,7 +407,7 @@ export function Timeline() {
                 <div>
                   <div className="text-[11px] text-muted">{tf("negotiated_rate", "Negotiated Rate")}</div>
                   <div className="font-semibold text-ink">
-                    {formatEur(selected.daily_rate)}
+                    {money(selected.daily_rate)}
                     <span className="text-muted font-normal">/{tf("day", "day")}</span>
                   </div>
                 </div>
@@ -416,7 +417,7 @@ export function Timeline() {
                 </div>
                 <div>
                   <div className="text-[11px] text-muted">{tf("live_total", "Total")}</div>
-                  <div className="font-semibold text-ink">{formatEur(selected.total_amount)}</div>
+                  <div className="font-semibold text-ink">{money(selected.total_amount)}</div>
                 </div>
               </div>
             )}

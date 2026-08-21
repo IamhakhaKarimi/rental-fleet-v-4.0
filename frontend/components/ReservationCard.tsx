@@ -1,16 +1,15 @@
 "use client";
 import { useEffect, useState } from "react";
-import { api, apiGet, apiPost, apiPut } from "@/lib/api";
+import { api, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { Modal } from "./Modal";
+// Editing is the booking dialog prefilled — see BookingDialog's `editRental`.
+// The cycle back here is `import type` only, so it erases at compile time.
+import { BookingDialog } from "./BookingDialog";
 import { StatusBadge } from "./StatusBadge";
 import { SwipeCard, SwipeField, SwipePanel } from "./SwipeCard";
-import { TimeSelect24 } from "./TimeSelect24";
-import { DateField } from "./DateField";
-import { addDaysISO, billedDays } from "@/lib/dates";
-import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 
 export interface ActiveRental {
   deal_id: string;
@@ -63,172 +62,6 @@ function Stepper({ value, set, step = 5 }: { value: number; set: (n: number) => 
 }
 
 const lbl = "text-xs text-muted block mb-1";
-
-/**
- * Edit Reservation — dates, negotiated rate and the assigned car. Lives in its own
- * modal (rather than a collapsible card section) so the whole screen belongs to the
- * one booking being changed. Closes itself once the save lands.
- */
-export function EditReservationForm({
-  rental: r,
-  onChange,
-  onClose,
-}: {
-  rental: ActiveRental;
-  onChange: () => void;
-  onClose: () => void;
-}) {
-  const { t } = useI18n();
-  const toast = useToast();
-  const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
-  const license = useLicenseLimits();
-  // Rescheduling is the other route into an unlicensed year, so both pickers
-  // stop where the licence does — the server refuses past it either way.
-  const licenseMax = license?.max_date;
-
-  const [rate, setRate] = useState(Math.round((r.daily_rate || 0) / 100));
-  const [vehicleId, setVehicleId] = useState(r.vehicle_id);
-  const [startDate, setStartDate] = useState(r.start_dt.slice(0, 10));
-  const [returnDate, setReturnDate] = useState(r.end_dt.slice(0, 10));
-  const [startTime, setStartTime] = useState(r.start_dt.slice(11, 16) || "10:00");
-  const [returnTime, setReturnTime] = useState(r.end_dt.slice(11, 16) || "10:00");
-  const [cars, setCars] = useState<{ vehicle_id: string; make_model: string; license_plate?: string }[]>([]);
-  const [busy, setBusy] = useState(false);
-  // Billed off the real elapsed span (any time past a full 24h multiple owes
-  // the next day), not a plain calendar-date diff — see lib/dates.ts#billedDays.
-  const editDays = billedDays(startDate, startTime, returnDate, returnTime);
-  // Nudging the day count resets the return time to match the start time, so
-  // the stepper always lands on an exact N-day span; dragging the return date
-  // or time further away from there is what makes the extra day show up.
-  const setEditDays = (n: number) => {
-    const nd = Math.max(1, n);
-    setReturnTime(startTime);
-    setReturnDate(addDaysISO(startDate, nd));
-  };
-
-  useEffect(() => {
-    apiGet<{ vehicle_id: string; make_model: string; license_plate?: string }[]>("/api/vehicles/active")
-      .then(setCars)
-      .catch(() => {});
-  }, []);
-
-  async function applyEdit() {
-    setBusy(true);
-    try {
-      const startChanged = startDate && startDate !== r.start_dt.slice(0, 10);
-      const endChanged = returnDate && returnDate !== r.end_dt.slice(0, 10);
-      const startTimeChanged = startTime && startTime !== r.start_dt.slice(11, 16);
-      const endTimeChanged = returnTime && returnTime !== r.end_dt.slice(11, 16);
-      if (startChanged || endChanged || startTimeChanged || endTimeChanged) {
-        await apiPut(`/api/rentals/${r.deal_id}/dates`, {
-          start_date: startDate,
-          return_date: returnDate,
-          start_time: startTime,
-          return_time: returnTime,
-        });
-      }
-      if (rate !== Math.round((r.daily_rate || 0) / 100)) {
-        await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
-      }
-      if (vehicleId && vehicleId !== r.vehicle_id) {
-        await apiPut(`/api/rentals/${r.deal_id}/vehicle`, { vehicle_id: vehicleId });
-      }
-      toast.success(tf("reservation_updated", "Reservation updated."));
-      onChange();
-      onClose();
-    } catch (e: any) {
-      if (isLicenseError(e)) {
-        toast.error(licenseMessage(t, license));
-        return;
-      }
-      const k = e?.key || "error";
-      const fb =
-        k === "date_conflict"
-          ? "That return date overlaps another booking for this car."
-          : k === "invalid_dates"
-          ? "The return date must be after the start date."
-          : "Could not save the changes.";
-      toast.error(tf(k, fb));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <div>
-        <label className={lbl}>{tf("start_date", "Start Date")}</label>
-        {/* Time under date, same as the booking dialog. */}
-        <div className="space-y-1.5">
-          <DateField
-            value={startDate}
-            onChange={setStartDate}
-            max={licenseMax}
-            rangeStart={startDate}
-            rangeEnd={returnDate}
-            ariaLabel={tf("start_date", "Start Date")}
-          />
-          <TimeSelect24
-            value={startTime}
-            onChange={setStartTime}
-            ariaLabel={`${tf("start_date", "Start Date")} — ${tf("time", "Time")}`}
-          />
-        </div>
-      </div>
-      <div>
-        <label className={lbl}>{tf("return_date", "Return Date")}</label>
-        <div className="space-y-1.5">
-          <DateField
-            value={returnDate}
-            onChange={setReturnDate}
-            min={addDaysISO(startDate, 1)}
-            max={licenseMax}
-            rangeStart={startDate}
-            rangeEnd={returnDate}
-            ariaLabel={tf("return_date", "Return Date")}
-          />
-          <TimeSelect24
-            value={returnTime}
-            onChange={setReturnTime}
-            ariaLabel={`${tf("return_date", "Return Date")} — ${tf("time", "Time")}`}
-          />
-        </div>
-      </div>
-      <div>
-        <label className={lbl}>{t("days")}</label>
-        <Stepper value={editDays} set={setEditDays} step={1} />
-      </div>
-      <div>
-        <label className={lbl}>{t("negotiated_rate")} (€)</label>
-        <Stepper value={rate} set={setRate} />
-      </div>
-      <div>
-        <label className={lbl}>
-          {t("change_vehicle") === "change_vehicle" ? "Change Vehicle" : t("change_vehicle")}
-        </label>
-        <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
-          {cars.map((c) => (
-            <option key={c.vehicle_id} value={c.vehicle_id}>
-              {c.vehicle_id} · {c.make_model}
-              {c.license_plate ? ` · ${c.license_plate}` : ""}
-              {c.vehicle_id === r.vehicle_id ? " · (keep)" : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-      <button
-        className="btn btn-primary w-full"
-        onClick={applyEdit}
-        disabled={busy}
-        title={tf("apply_hint", "Save the new rate / vehicle")}
-      >
-        <span className="msr text-[16px]">check</span>
-        {busy ? "…" : tf("apply", "Apply")}
-      </button>
-    </div>
-  );
-}
-
 /**
  * Manage / Return — closing charges, condition notes and the return itself.
  * Modal-hosted for the same reason as the edit form: closing a rental is a
@@ -312,6 +145,7 @@ export function ManageReturnForm({
 }
 
 export function ReservationCard({ rental, onChange }: { rental: ActiveRental; onChange: () => void }) {
+  const fmt = useMoney();
   const { t, lang } = useI18n();
   const toast = useToast();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
@@ -324,6 +158,12 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
   };
 
   const [editOpen, setEditOpen] = useState(false);
+  // The edit dialog is the booking dialog, so its modal is sized per-step too.
+  const [editStep, setEditStep] = useState<string>("period");
+  const closeEdit = () => {
+    setEditOpen(false);
+    setEditStep("period");
+  };
   const [manageOpen, setManageOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // Print-invoice language picker — asks which language the client's invoice uses.
@@ -422,8 +262,8 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
             <StatusBadge status={r.status} />
           </div>
           <div className="text-[11px] text-muted mt-1.5">
-            {formatEur(r.daily_rate)}/{tf("day", "day")} · {t("days")}: {r.rental_days} ·{" "}
-            {t("live_total")}: {formatEur(r.total_amount)} · {t("deposit")}: {formatEur(r.deposit)}
+            {fmt(r.daily_rate)}/{tf("day", "day")} · {t("days")}: {r.rental_days} ·{" "}
+            {t("live_total")}: {fmt(r.total_amount)} · {t("deposit")}: {fmt(r.deposit)}
           </div>
         </SwipePanel>
       </div>
@@ -470,15 +310,27 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
         </button>
       </div>
 
+      {/* Same dialog as "New Reservation", prefilled — one shape of a rental to
+          learn, whether you are creating or changing one. */}
       {editOpen && (
         <Modal
           title={`${
             t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")
           } · ${r.client_name}`}
-          onClose={() => setEditOpen(false)}
-          wide
+          onClose={closeEdit}
+          size={editStep === "review" ? "full" : "compact"}
+          fullHeight
+          bodyClassName="!mt-[10px] !mb-[10px] !px-[50px] !py-[10px]"
         >
-          <EditReservationForm rental={r} onChange={onChange} onClose={() => setEditOpen(false)} />
+          <BookingDialog
+            editRental={r}
+            onClose={closeEdit}
+            onCreated={() => {
+              onChange();
+              closeEdit();
+            }}
+            onStepChange={setEditStep}
+          />
         </Modal>
       )}
 

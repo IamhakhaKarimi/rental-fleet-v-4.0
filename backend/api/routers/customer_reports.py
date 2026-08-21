@@ -11,7 +11,8 @@ The CSV is the same column selection in spreadsheet form. Both draw from one
 column registry (_COLUMNS) so a column added there shows up in both reports.
 
 All three cover active AND closed rentals and are gated view_management (same as
-the Customers page). Money is INTEGER CENTS; formatted at the edge via format_eur.
+the Customers page). Money is INTEGER CENTS; formatted at the edge via format_money_display,
+so the report honours the business display currency like every other surface.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from config.i18n import t_lang
 from config.settings import LANGUAGES
 from data.repositories import app_settings as app_cfg
 from data.repositories import rentals as rrepo
-from ui.components import format_eur
+from ui.components import format_money_display
 from ui.pdf import build_paged_table_pdf, build_timeline_pdf
 
 router = APIRouter(prefix="/api/reports", tags=["customer-reports"])
@@ -89,9 +90,9 @@ _COLUMNS: dict[str, tuple[str, str, object, float]] = {
     "end_time":    ("col_end_time", "End Time", lambda r: _split_dt(r.get("end_dt"))[1], 1.0),
     "days":        ("days", "Days",             lambda r: str(r.get("rental_days") or ""), 0.7),
     "daily_rate":  ("negotiated_rate", "Daily Rate",
-                    lambda r: format_eur(int(r.get("daily_rate") or 0)), 1.1),
+                    lambda r: format_money_display(int(r.get("daily_rate") or 0)), 1.1),
     "total":       ("live_total", "Total",
-                    lambda r: format_eur(int(r.get("total_amount") or 0)), 1.2),
+                    lambda r: format_money_display(int(r.get("total_amount") or 0)), 1.2),
 }
 
 # What a report contains when the caller names no columns — the full set, which
@@ -239,7 +240,7 @@ def customers_table_pdf(body: CustomersReportIn,
          ", ".join(months) if months else _label("all_months", "All months", lang)),
         (_label("sorted_by", "Sorted by", lang), sort_name),
         (_label("customers_count", "Customers", lang), str(len(rows))),
-        (_label("total_revenue", "Total Revenue", lang), format_eur(total_amount)),
+        (_label("total_revenue", "Total Revenue", lang), format_money_display(total_amount)),
     ]
 
     pdf = build_paged_table_pdf(

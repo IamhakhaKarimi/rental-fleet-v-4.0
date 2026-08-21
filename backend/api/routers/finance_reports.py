@@ -2,7 +2,7 @@
 
 Builds (title, headers, rows, total_row) from finance_service / vehicle_costs and
 serves it as CSV (utf-8-sig for Excel) or PDF (ui/pdf.build_report_pdf, bundled
-DejaVu font). All money is formatted at the edge via format_eur. Gated view_finance.
+DejaVu font). All money is formatted at the edge via format_money_display. Gated view_finance.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from api.deps import require
 from data.repositories import app_settings as app_cfg
 from data.repositories import vehicle_costs as costs_repo
 from services import finance_service as fin
-from ui.components import format_eur
+from ui.components import format_money_display
 from ui.pdf import build_report_pdf
 
 router = APIRouter(prefix="/api/finance/report", tags=["finance-reports"])
@@ -25,7 +25,9 @@ _SLUGS = {"overview", "monthly", "yearly", "by_vehicle", "by_customer", "expense
 
 
 def _eur(cents) -> str:
-    return format_eur(int(cents or 0))
+    # format_money_display, not format_eur: the report has to honour the display
+    # currency the same way the invoices and the web UI do.
+    return format_money_display(int(cents or 0))
 
 
 def _report(slug: str):

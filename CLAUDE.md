@@ -100,6 +100,7 @@ backend/
 | `frontend/lib/auth.tsx` | `useAuth()` context |
 | `frontend/lib/i18n.tsx` | `useT()` i18n context |
 | `frontend/lib/toast.tsx` | `useToast()` — portal-rendered success/error/info toasts |
+| `frontend/lib/currency.tsx` | `useCurrency()` / `useMoney()` — the display-currency context and the one money formatter every screen uses |
 | `frontend/lib/types.ts` | All TypeScript interfaces |
 | `frontend/components/ViewToggle.tsx` | Shared card/table view switch (Fleet, Reservations, Customers); `max-lg:hidden` |
 | `frontend/components/BottomNav.tsx` | Phone-only thumb-zone bottom bar (`md:hidden`) + the More burger |
@@ -378,6 +379,60 @@ Two specificity gotchas that layer already solves:
 ---
 
 ## Recent Updates (this session)
+
+- **Display currency (EUR / Albanian Lek) now works app-wide.** The setting was
+  display-only and half-wired; four defects fixed, and Lek now shows on every
+  money surface instead of just Fleet/Customers/invoices.
+  - **One formatter per side, used everywhere.** Backend
+    `ui/components.format_invoice_money` → **`format_money_display`** (it is no
+    longer invoice-only); the finance and customer report builders were calling
+    bare `format_eur` and now go through it. Frontend gained **`useMoney()`** in
+    `lib/currency.tsx` — the twin of that function — and all ~50 `formatEur`
+    call sites across 9 files moved onto it (Finance, Dashboard, Reservations,
+    BookingDialog, Timeline, VisitorHome, settings' LicenseTab). `formatEur` /
+    `format_eur` stay as the raw EUR primitive underneath. **Rule: new money UI
+    calls `useMoney()` / `format_money_display`, never `formatEur` directly.**
+    Chart *tooltips* are currency-aware (`useChartTooltipFmt`); axis ticks stay
+    bare numbers, since a dual-currency string does not fit them.
+  - **The `ui/` package is now API-safe by construction.** What survives is
+    `components.py`, `invoice.py`, `invoice_links.py`, `pdf.py`, `photos.py`,
+    `theme.py` — each either free of streamlit or importing it *lazily inside a
+    function*, which is what lets FastAPI use them. **Keep that property:** a
+    module-level `import streamlit` in `ui/` puts the module out of the API's
+    reach. One live exception remains: `ui/pdf.build_license_invoice_pdf` calls
+    the session-based `t()` (not `t_lang()`), so it still needs streamlit at
+    call time and nothing reachable invokes it — pre-existing, and it is the
+    last EUR-only money path if software-license invoices are ever ported.
+  - **The switch applies without a page reload.** `CurrencyProvider` fetched
+    once on mount and had no way to refetch, so after saving in Settings the
+    whole app kept formatting money the old way until a hard refresh. The
+    context now exposes `refresh()`, awaited by the Settings save.
+  - **PDF invoice columns are currency-aware** (`ui/pdf.py`). fpdf does not clip
+    an over-wide `cell` — it bleeds the text left over the neighbouring column.
+    `"€1,200 (110,400 L)"` is 33.9mm at 10pt DejaVuSans against a 33mm amount
+    column, and the 13pt bold grand total needed 57mm against 55mm. Line items
+    are now `76/16/44/44` under ALL (`90/25/32/33` under EUR) and the totals
+    block `75·55/65` (`85·55/55`); both keep the 180mm row and the 195mm right
+    edge. Verified by measuring every amount from €0 to €50,000 in both modes.
+  - **A bad exchange rate is rejected, not silently swallowed.**
+    `set_eur_all_rate()` substitutes the default for anything ≤0, so the old
+    endpoint answered 200 while the stored rate reverted to 92 — and the
+    Settings input posted `0` for a cleared box. `PUT /api/settings/business/currency`
+    now 400s `invalid_exchange_rate` (new tr/en/sq key) on 0/negative/NaN/absurd
+    values before writing anything; the input posts `NaN` rather than `0` and
+    Save is disabled while the rate is unusable.
+  - Cosmetic: a zero amount renders `€0`, not `€0 (0 L)`, on both sides.
+  - **Six dead Streamlit-era `ui/` modules deleted** in the same pass, once the
+    currency sweep surfaced them: `auth_view.py`, `booking.py`,
+    `license_invoice.py`, `nav.py`, `notifications.py`, `timeline.py` (1,215
+    lines). All six `import streamlit` at *module level*, so they raise on
+    import and no live code could ever have loaded them; `requirements.txt`
+    deliberately excludes streamlit. Every dependency arrow ran dead -> live
+    (`booking -> components/invoice`, `license_invoice -> components/pdf`,
+    `nav -> auth_view/notifications`), never the reverse, so the cluster was
+    closed. Each has a shipped Next.js replacement — these are MIGRATION_SPEC's
+    `rewrite_frontend` list, and that migration is done. Recover from git if
+    ever needed.
 
 - **Customers page — report column order, list sort, and a delete that sticks.**
   The report modal (PDF + CSV) picks column ORDER by drag & drop, not just which

@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n, useT } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
-import { formatEur } from "@/lib/money";
+import { useCurrency, useMoney, DEFAULT_EUR_ALL_RATE } from "@/lib/currency";
 import { useTheme } from "@/lib/theme";
 import { licenseCapNote, refreshLicenseLimits } from "@/lib/license";
 import { Modal } from "@/components/Modal";
@@ -962,7 +962,13 @@ function BusinessTab() {
     iban: "",
     pay_qr_enabled: false,
   });
-  const [currency, setCurrency] = useState({ currency: "EUR", exchange_rate: 92 });
+  const [currency, setCurrency] = useState({
+    currency: "EUR",
+    exchange_rate: DEFAULT_EUR_ALL_RATE,
+  });
+  // Saving the display currency has to update the app-wide context too, or the
+  // rest of the UI keeps formatting money the old way until a page reload.
+  const { refresh: refreshCurrency } = useCurrency();
   const [msg, setMsg] = useState<{ ok: boolean; m: string }>({ ok: true, m: "" });
 
   const load = useCallback(() => {
@@ -980,7 +986,7 @@ function BusinessTab() {
         });
         setCurrency({
           currency: d.currency || "EUR",
-          exchange_rate: d.exchange_rate || 92,
+          exchange_rate: d.exchange_rate || DEFAULT_EUR_ALL_RATE,
         });
       })
       .catch(() => {});
@@ -1040,21 +1046,26 @@ function BusinessTab() {
             <Field label={f(t, "currency_rate_label", "Exchange rate (1 EUR = ? ALL)")}>
               <input
                 type="number"
-                min={0}
+                min={0.01}
                 step="0.01"
-                value={currency.exchange_rate}
+                value={Number.isFinite(currency.exchange_rate) ? currency.exchange_rate : ""}
                 onChange={(e) =>
-                  setCurrency((p) => ({ ...p, exchange_rate: parseFloat(e.target.value) || 0 }))
+                  // NaN, not 0, for an empty field: the server rejects a
+                  // non-positive rate, so a cleared box must fail loudly rather
+                  // than post a 0 that used to be silently rewritten to 92.
+                  setCurrency((p) => ({ ...p, exchange_rate: parseFloat(e.target.value) }))
                 }
               />
             </Field>
           </div>
           <button
             className="btn btn-primary w-full"
+            disabled={!(currency.exchange_rate > 0)}
             onClick={() =>
               run(async () => {
                 await apiPut("/api/settings/business/currency", currency);
                 load();
+                await refreshCurrency();
               }, f(t, "saved", "Saved"))
             }
           >
@@ -1180,6 +1191,7 @@ const blankLicense = {
 };
 
 function LicenseTab() {
+  const fmt = useMoney();
   const t = useT();
   const toast = useToast();
   const { requestDelete } = useDeleteUndo();
@@ -1457,7 +1469,7 @@ function LicenseTab() {
                   <td className="p-2.5 font-medium">{r.licensee || "—"}</td>
                   <td className="p-2.5">{r.year}</td>
                   <td className="p-2.5">{r.years}</td>
-                  <td className="p-2.5">{formatEur(r.amount)}</td>
+                  <td className="p-2.5">{fmt(r.amount)}</td>
                   <td className="p-2.5 text-muted">{fmtDate(r.purchase_date, lang)}</td>
                   <td className="p-2.5">
                     <div className="flex items-center gap-1.5 justify-end">

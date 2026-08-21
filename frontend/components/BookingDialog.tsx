@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
-import { formatEur } from "@/lib/money";
+import { useMoney } from "@/lib/currency";
 import { addDaysISO, billedDays, daysBetweenISO, todayISO } from "@/lib/dates";
 import { isLicenseError, licenseCapNote, licenseMessage, useLicenseLimits } from "@/lib/license";
 import { DateField } from "@/components/DateField";
@@ -12,6 +12,7 @@ import { TimeSelect24 } from "@/components/TimeSelect24";
 import { InvoicePreview, useBusinessBrand } from "@/components/InvoicePreview";
 import { StepSidebar } from "@/components/StepSidebar";
 import type { LanguagesInfo } from "@/lib/types";
+import type { ActiveRental } from "@/components/ReservationCard";
 
 type StepId = "period" | "vehicle" | "client" | "review";
 
@@ -75,6 +76,16 @@ function Stepper({
   );
 }
 
+/** A field that exists in the form but cannot be changed here — shown rather
+ *  than hidden so the edit screen still reads as the whole deal. */
+function ReadOnly({ value }: { value: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-[rgba(17,24,39,0.03)] px-2.5 py-1.5 text-[13px] text-ink">
+      {value}
+    </div>
+  );
+}
+
 /**
  * Quick Rental Registration — a step sidebar (period → vehicle → client →
  * review) on the left of the form, one step's fields shown at a time, and a
@@ -84,39 +95,60 @@ function Stepper({
  * the checkmarks are just a progress cue, not a gate.
  *
  * `preselectVehicleId` pre-picks a car (used by the dashboard "Rent" buttons).
+ *
+ * `editRental` turns the very same dialog into *Edit Reservation*: the steps,
+ * the period band, the pricing controls and the live invoice preview are
+ * identical, only prefilled from the booking and saved through the three
+ * `PUT /api/rentals/{id}/…` endpoints instead of `POST /api/rentals`. Fields the
+ * API cannot change after the fact (client identity, deposit, invoice language)
+ * render read-only rather than disappearing, so the screen still reads as the
+ * whole deal.
  */
 export function BookingDialog({
   onClose,
   onCreated,
   preselectVehicleId,
   onStepChange,
+  editRental,
 }: {
   onClose: () => void;
   onCreated: () => void;
   preselectVehicleId?: string;
+  /** When given, the dialog edits this rental instead of creating a new one. */
+  editRental?: ActiveRental;
   /** Lets the parent modal size itself per-step (the Review step needs the
    *  wide two-column layout; the others don't). */
   onStepChange?: (step: StepId) => void;
 }) {
   const { t } = useI18n();
   const toast = useToast();
+  const fmt = useMoney();
   const { user } = useAuth();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
   const biz = useBusinessBrand();
   const license = useLicenseLimits();
 
-  const [startDate, setStartDate] = useState(todayISO());
-  const [allowPast, setAllowPast] = useState(false);
-  const [startTime, setStartTime] = useState("10:00");
-  const [days, setDays] = useState(3);
-  const [returnTime, setReturnTime] = useState("10:00");
+  // Edit mode prefills every control from the booking; create mode keeps the
+  // old defaults verbatim.
+  const isEdit = !!editRental;
+  const [startDate, setStartDate] = useState(editRental ? editRental.start_dt.slice(0, 10) : todayISO());
+  // An existing booking may well have started yesterday — the past-date guard
+  // would otherwise refuse to show its own start date.
+  const [allowPast, setAllowPast] = useState(!!editRental);
+  const [startTime, setStartTime] = useState(editRental ? editRental.start_dt.slice(11, 16) || "10:00" : "10:00");
+  const [days, setDays] = useState(
+    editRental
+      ? Math.max(1, daysBetweenISO(editRental.start_dt.slice(0, 10), editRental.end_dt.slice(0, 10)))
+      : 3
+  );
+  const [returnTime, setReturnTime] = useState(editRental ? editRental.end_dt.slice(11, 16) || "10:00" : "10:00");
   const [cars, setCars] = useState<FreeCar[]>([]);
-  const [vehicleId, setVehicleId] = useState("");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [idp, setIdp] = useState("");
-  const [rate, setRate] = useState(30);
-  const [deposit, setDeposit] = useState(0);
+  const [vehicleId, setVehicleId] = useState(editRental?.vehicle_id || "");
+  const [name, setName] = useState(editRental?.client_name || "");
+  const [phone, setPhone] = useState(editRental?.phone || "");
+  const [idp, setIdp] = useState(editRental?.id_passport || "");
+  const [rate, setRate] = useState(editRental ? Math.round((editRental.daily_rate || 0) / 100) : 30);
+  const [deposit, setDeposit] = useState(editRental ? Math.round((editRental.deposit || 0) / 100) : 0);
   const [lang, setLang] = useState("tr");
   const [langs, setLangs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -175,15 +207,33 @@ export function BookingDialog({
       return_time: returnTime,
     })
       .then((d) => {
-        setCars(d.cars);
+        // The car being edited is booked *by this rental*, so the availability
+        // endpoint rightly leaves it out. Put it back at the head of the list —
+        // "keep the current car" has to stay a choice.
+        const list = editRental
+          ? [
+              ...(d.cars.some((c) => c.vehicle_id === editRental.vehicle_id)
+                ? []
+                : [
+                    {
+                      vehicle_id: editRental.vehicle_id,
+                      make_model: editRental.make_model,
+                      license_plate: editRental.license_plate,
+                      base_daily_rate: editRental.daily_rate,
+                    },
+                  ]),
+              ...d.cars,
+            ]
+          : d.cars;
+        setCars(list);
         setVehicleId((cur) => {
-          if (preselectVehicleId && d.cars.some((c) => c.vehicle_id === preselectVehicleId)) return preselectVehicleId;
-          if (d.cars.some((c) => c.vehicle_id === cur)) return cur;
-          return d.cars[0]?.vehicle_id || "";
+          if (preselectVehicleId && list.some((c) => c.vehicle_id === preselectVehicleId)) return preselectVehicleId;
+          if (list.some((c) => c.vehicle_id === cur)) return cur;
+          return list[0]?.vehicle_id || "";
         });
       })
       .catch(() => {});
-  }, [startDate, startTime, days, returnTime, preselectVehicleId, overLicense]);
+  }, [startDate, startTime, days, returnTime, preselectVehicleId, overLicense, editRental]);
 
   // Pull an over-long booking back inside the licence the moment the cap loads
   // or the start date moves, so `days` can never carry a stale illegal value
@@ -194,6 +244,9 @@ export function BookingDialog({
 
   const car = cars.find((c) => c.vehicle_id === vehicleId);
   useEffect(() => {
+    // Picking a car adopts its base rate — except the car the rental already
+    // has, whose *negotiated* rate is the one worth keeping.
+    if (editRental && vehicleId === editRental.vehicle_id) return;
     if (car) setRate(Math.max(0, Math.round(car.base_daily_rate / 100)));
   }, [vehicleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -236,6 +289,10 @@ export function BookingDialog({
     setBusy(true);
     setErr("");
     try {
+      if (editRental) {
+        await saveEdit(editRental);
+        return;
+      }
       await apiPost("/api/rentals", {
         vehicle_id: vehicleId,
         make_model: car?.make_model || "",
@@ -256,10 +313,48 @@ export function BookingDialog({
     } catch (e: any) {
       // The server owns the licence decision; if it refused, say so in words
       // rather than showing the raw key.
-      setErr(isLicenseError(e) ? licenseMessage(t, license) : t(e?.key || "error"));
+      if (isLicenseError(e)) {
+        setErr(licenseMessage(t, license));
+      } else {
+        const k = e?.key || "error";
+        const fb =
+          k === "date_conflict"
+            ? "That period overlaps another booking for this car."
+            : k === "invalid_dates"
+            ? "The return date must be after the start date."
+            : "";
+        setErr(fb ? tf(k, fb) : t(k));
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Edit mode — only what the API can actually change after the fact: the
+   *  window, the negotiated rate and the assigned car, each skipped when it
+   *  did not move. */
+  async function saveEdit(r: ActiveRental) {
+    const startChanged = startDate !== r.start_dt.slice(0, 10);
+    const endChanged = returnDate !== r.end_dt.slice(0, 10);
+    const startTimeChanged = startTime !== r.start_dt.slice(11, 16);
+    const endTimeChanged = returnTime !== r.end_dt.slice(11, 16);
+    if (startChanged || endChanged || startTimeChanged || endTimeChanged) {
+      await apiPut(`/api/rentals/${r.deal_id}/dates`, {
+        start_date: startDate,
+        return_date: returnDate,
+        start_time: startTime,
+        return_time: returnTime,
+      });
+    }
+    if (rate !== Math.round((r.daily_rate || 0) / 100)) {
+      await apiPut(`/api/rentals/${r.deal_id}/rate`, { daily_rate_euros: rate });
+    }
+    if (vehicleId && vehicleId !== r.vehicle_id) {
+      await apiPut(`/api/rentals/${r.deal_id}/vehicle`, { vehicle_id: vehicleId });
+    }
+    toast.success(tf("reservation_updated", "Reservation updated."));
+    onCreated();
+    onClose();
   }
 
   const lbl = "text-[11px] font-medium text-muted block mb-1.5";
@@ -440,19 +535,25 @@ export function BookingDialog({
               </div>
               <div>
                 <span className={lbl}>{t("deposit")} (€)</span>
-                <Stepper value={deposit} onChange={setDeposit} step={10} ariaLabel={t("deposit")} />
+                {isEdit ? (
+                  <ReadOnly value={fmt(deposit * 100)} />
+                ) : (
+                  <Stepper value={deposit} onChange={setDeposit} step={10} ariaLabel={t("deposit")} />
+                )}
               </div>
             </div>
-            <label className={lbl}>
-              {tf("invoice_language", "Invoice language")}
-              <select value={lang} onChange={(e) => setLang(e.target.value)} className="!py-1.5">
-                {Object.entries(langs).map(([code, label]) => (
-                  <option key={code} value={code}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {!isEdit && (
+              <label className={lbl}>
+                {tf("invoice_language", "Invoice language")}
+                <select value={lang} onChange={(e) => setLang(e.target.value)} className="!py-1.5">
+                  {Object.entries(langs).map(([code, label]) => (
+                    <option key={code} value={code}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         )}
 
@@ -462,30 +563,55 @@ export function BookingDialog({
               <span className="msr text-[15px]">person</span>
               {tf("client_info", "Client Information")}
             </div>
-            <label className={lbl}>
-              {t("client_name")}
-              <input
-                className="uppercase-input !py-1.5"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <label className={lbl}>
-              {t("client_phone")}
-              <input
-                className="uppercase-input !py-1.5"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
-            </label>
-            <label className={lbl}>
-              {t("client_id")}
-              <input
-                className="uppercase-input !py-1.5"
-                value={idp}
-                onChange={(e) => setIdp(e.target.value)}
-              />
-            </label>
+            {isEdit ? (
+              <>
+                <div className={lbl}>
+                  {t("client_name")}
+                  <ReadOnly value={name || "—"} />
+                </div>
+                <div className={lbl}>
+                  {t("client_phone")}
+                  <ReadOnly value={phone || "—"} />
+                </div>
+                <div className={lbl}>
+                  {t("client_id")}
+                  <ReadOnly value={idp || "—"} />
+                </div>
+                <p className="text-[11px] text-muted leading-snug">
+                  {tf(
+                    "client_locked_hint",
+                    "Client details belong to the customer record — edit them on the Customers page."
+                  )}
+                </p>
+              </>
+            ) : (
+              <>
+                <label className={lbl}>
+                  {t("client_name")}
+                  <input
+                    className="uppercase-input !py-1.5"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+                <label className={lbl}>
+                  {t("client_phone")}
+                  <input
+                    className="uppercase-input !py-1.5"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </label>
+                <label className={lbl}>
+                  {t("client_id")}
+                  <input
+                    className="uppercase-input !py-1.5"
+                    value={idp}
+                    onChange={(e) => setIdp(e.target.value)}
+                  />
+                </label>
+              </>
+            )}
           </div>
         )}
 
@@ -497,10 +623,15 @@ export function BookingDialog({
                 {tf("review_step", "Review")}
               </div>
               <p className="text-[12px] text-muted leading-snug">
-                {tf(
-                  "review_step_hint",
-                  "Check the invoice preview below, then save the rental once every step above is checked off."
-                )}
+                {isEdit
+                  ? tf(
+                      "review_step_hint_edit",
+                      "Check the updated invoice preview, then save the changes to this reservation."
+                    )
+                  : tf(
+                      "review_step_hint",
+                      "Check the invoice preview below, then save the rental once every step above is checked off."
+                    )}
               </p>
               <ul className="space-y-1.5 lg:space-y-1">
                 {steps
@@ -573,10 +704,10 @@ export function BookingDialog({
           <div className="flex items-center justify-between gap-3 flex-wrap border-t border-line pt-3 shrink-0">
             <div className="flex items-baseline gap-2">
               <span className="text-[11px] font-medium text-muted">{t("live_total")}</span>
-              <span className="font-display font-bold text-accent text-xl">{formatEur(total)}</span>
+              <span className="font-display font-bold text-accent text-xl">{fmt(total)}</span>
               {deposit > 0 && (
                 <span className="text-[11px] text-muted">
-                  − {formatEur(deposit * 100)} = <b className="text-ink">{formatEur(total - deposit * 100)}</b>
+                  − {fmt(deposit * 100)} = <b className="text-ink">{fmt(total - deposit * 100)}</b>
                 </span>
               )}
             </div>
@@ -586,9 +717,16 @@ export function BookingDialog({
                 <span className="msr text-[16px] sm:hidden">close</span>
                 <span className="max-sm:hidden">{tf("cancel", "Cancel")}</span>
               </button>
-              <button className="btn btn-primary" onClick={submit} disabled={busy} title={t("register_btn")}>
+              <button
+                className="btn btn-primary"
+                onClick={submit}
+                disabled={busy}
+                title={isEdit ? tf("save_changes", "Save changes") : t("register_btn")}
+              >
                 <span className="msr text-[16px]">check</span>
-                <span className="max-sm:hidden">{busy ? "…" : t("register_btn")}</span>
+                <span className="max-sm:hidden">
+                  {busy ? "…" : isEdit ? tf("save_changes", "Save changes") : t("register_btn")}
+                </span>
               </button>
             </div>
           </div>

@@ -232,12 +232,14 @@ def customers_table_pdf(body: CustomersReportIn,
                  "vehicle": _label("invoice_vehicle", "Vehicle", lang)}.get(
                      body.sort_by, _label("client_name", "Customer", lang))
     months = sorted(set(body.months))
+    total_amount = sum(int(r.get("total_amount") or 0) for r in rentals)
     meta = [
         (_label("generated", "Generated", lang), datetime.now().strftime("%Y-%m-%d %H:%M")),
         (_label("select_month", "Months", lang),
          ", ".join(months) if months else _label("all_months", "All months", lang)),
         (_label("sorted_by", "Sorted by", lang), sort_name),
         (_label("customers_count", "Customers", lang), str(len(rows))),
+        (_label("total_revenue", "Total Revenue", lang), format_eur(total_amount)),
     ]
 
     pdf = build_paged_table_pdf(

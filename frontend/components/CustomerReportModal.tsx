@@ -81,6 +81,7 @@ export function CustomerReportModal({
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("name");
+  const [colsOpen, setColsOpen] = useState(false);
   const [numbered, setNumbered] = useState(true);
   const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(true);
@@ -240,32 +241,56 @@ export function CustomerReportModal({
         <div className="text-sm text-muted">{f(t, "loading", "Loading…")}</div>
       ) : (
         <div className="space-y-5">
-          {/* Columns — tick what to print, drag to set the left-to-right order */}
+          {/* Columns — tick what to print, drag to set the left-to-right order.
+              Collapsed by default: the checklist can run to a dozen rows, which
+              dwarfs the months/layout sections below it on first open. */}
           <section className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className={sectionTitle}>
+            <button
+              type="button"
+              className="flex items-center justify-between gap-2 w-full text-left"
+              onClick={() => setColsOpen((v) => !v)}
+              aria-expanded={colsOpen}
+            >
+              <div className={`${sectionTitle} flex items-center gap-1.5`}>
+                <span
+                  className="msr text-[16px] transition-transform"
+                  style={{ transform: colsOpen ? "rotate(90deg)" : "none" }}
+                  aria-hidden="true"
+                >
+                  chevron_right
+                </span>
                 {f(t, "report_columns", "Columns to include")}
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button className="btn !py-1 !px-2 text-xs" onClick={resetOrder}>
-                  {f(t, "reset_order", "Reset order")}
-                </button>
-                <button
-                  className="btn !py-1 !px-2 text-xs"
-                  onClick={() => setCols(allColsOn ? new Set() : new Set(columns.map((c) => c.key)))}
-                >
-                  {allColsOn ? f(t, "select_none", "Select none") : f(t, "select_all", "Select all")}
-                </button>
+              <span className="text-xs text-muted shrink-0">
+                {chosenCols.length}/{columns.length}
+              </span>
+            </button>
+            {!colsOpen && chosenCols.length > 0 && (
+              <div className="text-xs text-muted truncate pl-[22px]">
+                {chosenCols.map((k) => labelOf(k)).join(" › ")}
               </div>
-            </div>
-            <div className="text-xs text-muted">
-              {f(t, "report_drag_hint", "Drag a column to change where it prints — top of the list is the leftmost column.")}
-            </div>
-            <ul
-              className="space-y-1 max-h-[32vh] overflow-y-auto pr-1"
-              onDragOver={(e) => e.preventDefault()}
-            >
-              {orderedColumns.map((key, i) => {
+            )}
+            {colsOpen && (
+              <>
+                <div className="flex items-center justify-end gap-2 shrink-0">
+                  <button className="btn !py-1 !px-2 text-xs" onClick={resetOrder}>
+                    {f(t, "reset_order", "Reset order")}
+                  </button>
+                  <button
+                    className="btn !py-1 !px-2 text-xs"
+                    onClick={() => setCols(allColsOn ? new Set() : new Set(columns.map((c) => c.key)))}
+                  >
+                    {allColsOn ? f(t, "select_none", "Select none") : f(t, "select_all", "Select all")}
+                  </button>
+                </div>
+                <div className="text-xs text-muted">
+                  {f(t, "report_drag_hint", "Drag a column to change where it prints — top of the list is the leftmost column.")}
+                </div>
+                <ul
+                  className="space-y-1 max-h-[32vh] overflow-y-auto pr-1"
+                  onDragOver={(e) => e.preventDefault()}
+                >
+                  {orderedColumns.map((key, i) => {
                 const on = cols.has(key);
                 const printedAt = chosenCols.indexOf(key);
                 return (
@@ -336,23 +361,25 @@ export function CustomerReportModal({
                       <span className="msr text-[16px]">arrow_downward</span>
                     </button>
                   </li>
-                );
-              })}
-            </ul>
-            {chosenCols.length > 0 && (
-              <div className="text-xs text-muted truncate">
-                {f(t, "report_order", "Print order")}:{" "}
-                {chosenCols.map((k) => labelOf(k)).join(" › ")}
-              </div>
-            )}
-            {tooWide && (
-              <div className="text-xs text-danger">
-                {f(
-                  t,
-                  "report_too_wide",
-                  "That's a lot of columns for one A4 page — some cells will be shortened."
+                    );
+                  })}
+                </ul>
+                {chosenCols.length > 0 && (
+                  <div className="text-xs text-muted truncate">
+                    {f(t, "report_order", "Print order")}:{" "}
+                    {chosenCols.map((k) => labelOf(k)).join(" › ")}
+                  </div>
                 )}
-              </div>
+                {tooWide && (
+                  <div className="text-xs text-danger">
+                    {f(
+                      t,
+                      "report_too_wide",
+                      "That's a lot of columns for one A4 page — some cells will be shortened."
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </section>
 

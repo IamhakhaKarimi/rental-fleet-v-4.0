@@ -16,6 +16,7 @@ import { ViewToggle } from "@/components/ViewToggle";
 import { SwipeCard, SwipeField, SwipePanel, SwipeDeck } from "@/components/SwipeCard";
 import { CustomerReportModal, useMonthLabel } from "@/components/CustomerReportModal";
 import { usePagedTable } from "@/lib/usePagedTable";
+import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { Pagination } from "@/components/Pagination";
 import type { LanguagesInfo } from "@/lib/types";
 import { useDeleteUndo } from "@/lib/deleteUndo";
@@ -37,6 +38,11 @@ interface CustomerRow {
   last_make_model: string | null;
   last_plate: string | null;
 }
+
+// How the customer list is ordered. The value goes to the API as `?sort=`, which
+// orders the whole list BEFORE the table's page slice — sorting the 25 rows of
+// the current page would only shuffle that page.
+type CustomerSort = "name" | "start_date" | "price";
 
 interface CustomerRental {
   deal_id: string;
@@ -143,7 +149,7 @@ function CustomerDialog({
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
-  const { requestDelete } = useDeleteUndo();
+  const { requestDelete, isPending } = useDeleteUndo();
   const { currency, exchangeRate } = useCurrency();
   const fmt = (cents: number) => formatMoneyDisplay(cents, currency, exchangeRate);
 
@@ -837,7 +843,7 @@ export default function CustomersPage() {
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const toast = useToast();
-  const { requestDelete } = useDeleteUndo();
+  const { requestDelete, isPending } = useDeleteUndo();
   const { currency, exchangeRate } = useCurrency();
   const [rows, setRows] = useState<CustomerRow[]>([]);
   const [q, setQ] = useState("");
@@ -847,12 +853,13 @@ export default function CustomersPage() {
   const [csvReport, setCsvReport] = useState(false);
   const [pdfReport, setPdfReport] = useState(false);
   const [view, changeView] = useResponsiveView("customers_view");
+  const [sortBy, setSortBy] = useLocalStorageState<CustomerSort>("customers_sort", "name");
   // Server-paginated table (M5) — separate from `rows` above, which stays the
   // full filtered list the card view, quick-find dropdown and inactive list
   // need. Only fetches while the table is actually visible.
   const [tableRefresh, setTableRefresh] = useState(0);
   const paged = usePagedTable<CustomerRow>(
-    `/api/customers?q=${encodeURIComponent(q)}`, 25, view === "table", tableRefresh
+    `/api/customers?q=${encodeURIComponent(q)}&sort=${sortBy}`, 25, view === "table", tableRefresh
   );
 
   // Quick-find dropdown (independent search box + selected customer id).
@@ -863,11 +870,11 @@ export default function CustomersPage() {
 
   // Single source of truth — one fetch, reused by grid + dropdown + inactive list.
   const load = useCallback(async () => {
-    await apiGet<CustomerRow[]>(`/api/customers?q=${encodeURIComponent(q)}`)
+    await apiGet<CustomerRow[]>(`/api/customers?q=${encodeURIComponent(q)}&sort=${sortBy}`)
       .then(setRows)
       .catch(() => {});
     setTableRefresh((n) => n + 1);
-  }, [q]);
+  }, [q, sortBy]);
 
   const { isLoading, refetch } = usePolling(load, { interval: 15000 });
 
@@ -892,16 +899,24 @@ export default function CustomersPage() {
     setInvoice(req);
   }, []);
 
-  const inactive = useMemo(() => rows.filter((c) => (c.active_count ?? 0) === 0), [rows]);
+  // A delete is only sent once its 10s undo window elapses, but this page polls
+  // every 15s and refetches after every mutation. Without this filter such a
+  // refetch re-adds the row the user just deleted — it reappears mid-countdown,
+  // and (before the pagehide flush in lib/deleteUndo) survived the reload too.
+  const hidden = useCallback((c: CustomerRow) => isPending(`customer:${c.customer_id}`), [isPending]);
+  const visible = useMemo(() => rows.filter((c) => !hidden(c)), [rows, hidden]);
+  const pagedRows = useMemo(() => paged.rows.filter((c) => !hidden(c)), [paged.rows, hidden]);
+
+  const inactive = useMemo(() => visible.filter((c) => (c.active_count ?? 0) === 0), [visible]);
 
   // Quick-find dropdown options, filtered live by the pick search box.
   const pickOptions = useMemo(() => {
     const needle = pick.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((c) =>
+    if (!needle) return visible;
+    return visible.filter((c) =>
       `${c.full_name} ${c.phone || ""}`.toLowerCase().includes(needle)
     );
-  }, [rows, pick]);
+  }, [visible, pick]);
 
   // Keep the selected id valid against the filtered option list.
   useEffect(() => {
@@ -909,14 +924,21 @@ export default function CustomersPage() {
     setPickId(pickOptions.length ? String(pickOptions[0].customer_id) : "");
   }, [pickOptions, pickId]);
 
+  const sortOpts: { key: CustomerSort; label: string }[] = [
+    { key: "name", label: f(t, "sort_az", "Customer name (A–Z)") },
+    { key: "start_date", label: f(t, "sort_start_date", "Start date (newest first)") },
+    { key: "price", label: f(t, "sort_price", "Price (highest first)") },
+  ];
+
   function editPicked() {
-    const c = rows.find((r) => String(r.customer_id) === pickId);
+    const c = visible.find((r) => String(r.customer_id) === pickId);
     if (c) setOpen(c);
   }
 
   function deleteCustomer(c: CustomerRow) {
     let idx = -1;
     requestDelete({
+      key: `customer:${c.customer_id}`,
       title: t("delete_btn"),
       message: `${t("delete_btn")}: ${c.full_name}?`,
       onRemove: () =>
@@ -1013,19 +1035,38 @@ export default function CustomersPage() {
         </button>
       </div>
 
-      <input
-        placeholder={t("search")}
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        className="max-w-sm"
-      />
+      {/* Search + list order. The dropdown drives BOTH views: the same `?sort=`
+          goes to the full-list fetch behind the cards and to the paged table. */}
+      <div className="flex items-end gap-2 flex-wrap">
+        <input
+          placeholder={t("search")}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="max-w-sm"
+        />
+        <label className="text-xs text-muted max-sm:w-full">
+          {f(t, "sorted_by", "Sorted by")}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as CustomerSort)}
+            className="w-full lg:max-w-[14rem]"
+            title={f(t, "sort_customers_hint", "Order of the customer list")}
+          >
+            {sortOpts.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <p className="text-xs text-muted">
-        {rows.length} {f(t, "customers_count", "customers")}
+        {visible.length} {f(t, "customers_count", "customers")}
       </p>
 
       {view === "cards" ? (
         <SwipeDeck
-          items={rows}
+          items={visible}
           keyOf={(c) => c.customer_id}
           empty={
             <div className="text-sm text-muted">{f(t, "no_customers", "No customers found.")}</div>
@@ -1089,7 +1130,7 @@ export default function CustomersPage() {
               </tr>
             </thead>
             <tbody>
-              {paged.rows.map((c) => (
+              {pagedRows.map((c) => (
                 <tr key={c.customer_id} className="border-b border-line last:border-0">
                   <td className="p-2.5">
                     <span className="font-medium text-ink">{c.full_name}</span>
@@ -1127,7 +1168,7 @@ export default function CustomersPage() {
                   </td>
                 </tr>
               ))}
-              {paged.rows.length === 0 && (
+              {pagedRows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="p-4 text-sm text-muted text-center">
                     {f(t, "no_customers", "No customers found.")}

@@ -379,6 +379,24 @@ Two specificity gotchas that layer already solves:
 
 ## Recent Updates (this session)
 
+- **Customers page — report column order, list sort, and a delete that sticks.**
+  The report modal (PDF + CSV) picks column ORDER by drag & drop, not just which
+  columns: `_pick_columns()` keeps the caller's order instead of re-sorting into
+  `_COLUMNS` order (an empty request still means "every column, registry order",
+  so plain `GET /api/reports/customers.csv` is unchanged). The list gained a
+  sort dropdown — `GET /api/customers?sort=name|start_date|price`, applied
+  before the page slice so it orders the list rather than one page, driving the
+  card deck and the paged table from one control. And `lib/deleteUndo.tsx` no
+  longer loses the delete: `settle()` was returning the pending entry through a
+  `setPending` updater — which React 18 runs on the NEXT render — so the 10s
+  timer bailed out before it had anything and no DELETE was ever sent. It reads
+  a ref now; `pagehide` flushes anything still pending (`keepalive`), and
+  `isPending(key)` keeps a polled refetch from resurrecting a removed row.
+
+  The report modal's remaining hardcoded strings (`Select all`, `Columns to
+  include`, `Sorted by`, etc. — 20 keys in all) now have tr/en/sq entries too,
+  so the whole modal localizes instead of just the labels this session added.
+
 - **Mobile + tablet responsiveness pass.** See "Responsive Tiers" above. Phone
   gets a thumb-zone bottom bar + burger sheet, tablet gets the icon rail, and
   desktop (≥1024px) is unchanged — verified by measuring `<main>` padding,

@@ -98,6 +98,22 @@ interface ApiOpts {
   body?: unknown;
   headers?: Record<string, string>;
   raw?: boolean; // return Response instead of parsed body
+  keepalive?: boolean; // let the request outlive the page (see beginUnloadFlush)
+}
+
+/**
+ * A normal `fetch()` is cancelled when the page it belongs to goes away, so
+ * anything fired from a `pagehide`/`beforeunload` handler — a pending delete
+ * being flushed before a refresh, say — would never reach the server. Calling
+ * this once, at the top of such a handler, marks every request that follows
+ * `keepalive`, which the browser keeps in flight through the unload.
+ *
+ * One-way on purpose: it is only ever set while the document is being torn
+ * down, and the fresh page load starts with a fresh module.
+ */
+let unloadFlush = false;
+export function beginUnloadFlush() {
+  unloadFlush = true;
 }
 
 export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T> {
@@ -120,6 +136,7 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
     credentials: "include",
     headers,
     body,
+    keepalive: opts.keepalive || unloadFlush,
   });
 
   if (opts.raw) return res as unknown as T;

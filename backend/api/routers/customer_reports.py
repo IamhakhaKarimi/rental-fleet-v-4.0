@@ -4,8 +4,9 @@ flat CSV.
 The timeline PDF reuses ui/pdf.build_timeline_pdf in "customer-row" mode: one row
 per customer, each rental drawn as a bar on a shared monthly day axis. The TABLE
 PDF (build_paged_table_pdf) is the plain client list: the caller picks which
-columns to print, which months of rentals to include, how to sort, and how many
-rows fit on a page — every page carries the column header and a numbered footer.
+columns to print and in which order, which months of rentals to include, how to
+sort, and how many rows fit on a page — every page carries the column header and a
+numbered footer.
 The CSV is the same column selection in spreadsheet form. Both draw from one
 column registry (_COLUMNS) so a column added there shows up in both reports.
 
@@ -100,12 +101,16 @@ _DEFAULT_COLUMNS = list(_COLUMNS)
 
 
 def _pick_columns(columns: list[str] | None) -> list[str]:
-    """Validate + order a requested column list. Unknown keys are dropped; an empty
-    or fully-invalid request falls back to every column."""
+    """Validate a requested column list, KEEPING THE CALLER'S ORDER — the report
+    modal lets the user drag the columns into the layout they want, so the request
+    order is the print order. Unknown keys and repeats are dropped; an empty or
+    fully-invalid request falls back to every column in registry order."""
     if not columns:
         return list(_DEFAULT_COLUMNS)
-    wanted = set(columns)
-    chosen = [k for k in _COLUMNS if k in wanted]
+    chosen: list[str] = []
+    for key in columns:
+        if key in _COLUMNS and key not in chosen:
+            chosen.append(key)
     return chosen or list(_DEFAULT_COLUMNS)
 
 
@@ -138,7 +143,8 @@ def _select(deal_ids: list[str] | None, months: list[str] | None,
 
 
 class CustomersReportIn(BaseModel):
-    """Report selection. Empty deal_ids/months mean "no filter on that axis"."""
+    """Report selection. Empty deal_ids/months mean "no filter on that axis";
+    ``columns`` is ordered — it prints left-to-right exactly as given."""
     deal_ids: list[str] = []
     months: list[str] = []
     columns: list[str] = []

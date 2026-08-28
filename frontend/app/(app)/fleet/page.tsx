@@ -20,6 +20,7 @@ import { useVehicleThumbs } from "@/lib/useVehicleThumbs";
 import { usePagedTable } from "@/lib/usePagedTable";
 import { Pagination } from "@/components/Pagination";
 import type { Vehicle } from "@/lib/types";
+import { Skeleton } from "@/components/Skeleton";
 
 type V = Vehicle & { locked?: boolean };
 
@@ -549,7 +550,17 @@ export default function FleetPage() {
         {vehicles.length} {t("col_count")}
       </p>
 
-      {view === "cards" ? (
+      {isLoading && vehicles.length === 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="card p-3 space-y-2">
+              <Skeleton className="h-[190px] w-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          ))}
+        </div>
+      ) : view === "cards" ? (
         <SwipeDeck
           items={vehicles}
           keyOf={(v) => v.vehicle_id}
@@ -611,40 +622,54 @@ export default function FleetPage() {
               </tr>
             </thead>
             <tbody>
-              {paged.rows.map((v) => (
-                <tr key={v.vehicle_id} className="border-b border-line last:border-0 align-top">
-                  <td className="p-2.5">
-                    <span className="font-medium text-ink">{v.make_model}</span>
-                    <span className="text-muted"> · {v.vehicle_id}</span>
-                  </td>
-                  <td className="p-2.5 text-muted">{v.year || "—"}</td>
-                  <td className="p-2.5 text-muted">{v.license_plate || "—"}</td>
-                  <td className="p-2.5 text-muted">{v.color || "—"}</td>
-                  <td className="p-2.5 text-muted">{v.mileage != null ? v.mileage : "—"}</td>
-                  <td className="p-2.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <StatusBadge status={v.status} />
-                      {v.locked && (
-                        <span className="badge badge-warn">
-                          <span className="msr text-[13px]">lock</span>
-                        </span>
+              {paged.loading && paged.rows.length === 0 ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-b border-line last:border-0">
+                    {Array.from({ length: (canEdit || canFleet) ? 8 : 7 }).map((__, j) => (
+                      <td className="p-2.5" key={j}>
+                        <Skeleton className="h-4 w-full" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : (
+                <>
+                  {paged.rows.map((v) => (
+                    <tr key={v.vehicle_id} className="border-b border-line last:border-0 align-top">
+                      <td className="p-2.5">
+                        <span className="font-medium text-ink">{v.make_model}</span>
+                        <span className="text-muted"> · {v.vehicle_id}</span>
+                      </td>
+                      <td className="p-2.5 text-muted">{v.year || "—"}</td>
+                      <td className="p-2.5 text-muted">{v.license_plate || "—"}</td>
+                      <td className="p-2.5 text-muted">{v.color || "—"}</td>
+                      <td className="p-2.5 text-muted">{v.mileage != null ? v.mileage : "—"}</td>
+                      <td className="p-2.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <StatusBadge status={v.status} />
+                          {v.locked && (
+                            <span className="badge badge-warn">
+                              <span className="msr text-[13px]">lock</span>
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="p-2.5 text-right font-medium">{fmt(v.base_daily_rate)}</td>
+                      {(canEdit || canFleet) && (
+                        <td className="p-2.5">
+                          <div className="flex justify-end">{renderActions(v)}</div>
+                        </td>
                       )}
-                    </div>
-                  </td>
-                  <td className="p-2.5 text-right font-medium">{fmt(v.base_daily_rate)}</td>
-                  {(canEdit || canFleet) && (
-                    <td className="p-2.5">
-                      <div className="flex justify-end">{renderActions(v)}</div>
-                    </td>
+                    </tr>
+                  ))}
+                  {paged.rows.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="p-4 text-sm text-muted text-center">
+                        {t("no_cars")}
+                      </td>
+                    </tr>
                   )}
-                </tr>
-              ))}
-              {paged.rows.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="p-4 text-sm text-muted text-center">
-                    {t("no_cars")}
-                  </td>
-                </tr>
+                </>
               )}
             </tbody>
           </table>

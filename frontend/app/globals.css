@@ -1305,6 +1305,37 @@ input:focus, select:focus, textarea:focus {
 }
 .toast-in { animation: toast-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* Shimmering skeleton — replaces blank "Loading…" text so a slow request
+   still reads as "working", not "stuck". ease-in-out both ways keeps the
+   sweep from snapping at either end. */
+@keyframes shimmer-sweep {
+  0%   { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--skeleton-base, rgba(127, 127, 127, 0.14));
+  border-radius: 8px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    var(--skeleton-sheen, rgba(255, 255, 255, 0.35)) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+}
+:root.dark .skeleton {
+  --skeleton-base: rgba(255, 255, 255, 0.08);
+  --skeleton-sheen: rgba(255, 255, 255, 0.14);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

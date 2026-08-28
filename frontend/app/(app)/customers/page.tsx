@@ -17,6 +17,7 @@ import { CustomerReportModal, useMonthLabel } from "@/components/CustomerReportM
 import { usePagedTable } from "@/lib/usePagedTable";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { Pagination } from "@/components/Pagination";
+import { Skeleton } from "@/components/Skeleton";
 import type { LanguagesInfo } from "@/lib/types";
 import { useDeleteUndo } from "@/lib/deleteUndo";
 
@@ -674,8 +675,11 @@ function InvoiceViewer({ req }: { req: InvoiceRequest }) {
       ) : (
         <div className="card p-2 relative">
           {loading && (
-            <div className="absolute inset-0 grid place-items-center bg-bg/60 z-10 text-sm text-muted">
-              {f(t, "loading", "Loading…")}
+            <div className="absolute inset-0 bg-bg/60 z-10 p-4 space-y-2">
+              <Skeleton className="h-8 w-2/3" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-5/6" />
+              <Skeleton className="h-40 w-full" />
             </div>
           )}
           {/* A hard 760px is taller than a phone viewport, so the preview took
@@ -789,7 +793,11 @@ function InvoicePrintModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {loading ? (
-          <div className="text-sm text-muted">{f(t, "loading", "Loading…")}</div>
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-9 w-full" />
+            ))}
+          </div>
         ) : rentals.length === 0 ? (
           <div className="text-sm text-muted">{f(t, "no_active_rentals", "No active rentals.")}</div>
         ) : (

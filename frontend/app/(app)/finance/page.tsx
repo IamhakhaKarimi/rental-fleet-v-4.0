@@ -10,6 +10,7 @@ import { useMoney } from "@/lib/currency";
 import { DateField } from "@/components/DateField";
 import { isLicenseError, licenseMessage, useLicenseLimits } from "@/lib/license";
 import { useDeleteUndo } from "@/lib/deleteUndo";
+import { Skeleton } from "@/components/Skeleton";
 
 /* ── Response shapes (from backend/services/finance_service.py) ──────────────
    All money fields are INTEGER CENTS. */
@@ -106,9 +107,7 @@ const COMPENSATION_TYPES = [
 
 // Charts are recharts (3.x), which crashes SSR — load them client-only so the
 // server never evaluates recharts. See components/FinanceCharts.tsx.
-const ChartSkeleton = () => (
-  <div className="h-[300px] grid place-items-center text-sm text-muted">…</div>
-);
+const ChartSkeleton = () => <Skeleton className="h-[300px] w-full" />;
 const IncomeCostBarChart = dynamic(
   () => import("@/components/FinanceCharts").then((m) => m.IncomeCostBarChart),
   { ssr: false, loading: ChartSkeleton }

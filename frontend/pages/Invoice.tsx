@@ -1,6 +1,5 @@
-"use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -15,11 +14,12 @@ interface InvoiceMeta {
   default_lang: string;
 }
 
-export default function Page({ params }: { params: { dealId: string } }) {
-  const { dealId } = params;
+export default function Page() {
+  // Was Next's `params` prop; the route is /invoices/:dealId.
+  const { dealId = "" } = useParams<{ dealId: string }>();
   const t = useT();
   const toast = useToast();
-  const router = useRouter();
+  const navigate = useNavigate();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const [langs, setLangs] = useState<Record<string, string>>({});
@@ -107,7 +107,7 @@ export default function Page({ params }: { params: { dealId: string } }) {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
-          <button className="btn !py-1.5 !px-3 text-xs" onClick={() => router.back()}>
+          <button className="btn !py-1.5 !px-3 text-xs" onClick={() => navigate(-1)}>
             <span className="msr text-[16px]">arrow_back</span>
             {f(t, "back", "Back")}
           </button>

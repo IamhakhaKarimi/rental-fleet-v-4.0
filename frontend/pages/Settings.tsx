@@ -1,4 +1,3 @@
-"use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiDel, apiGet, apiPost, apiPut, apiBase } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -757,7 +756,6 @@ function ImageUploader({
     <div className="space-y-2">
       <div className="text-xs text-muted">{label}</div>
       {has && !hidden && (
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={`${apiBase()}${imgPath}?b=${bust}`}
           alt={label}

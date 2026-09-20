@@ -1,8 +1,6 @@
-"use client";
 import { useEffect, useRef } from "react";
-import Link from "next/link";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
-import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import { can } from "@/lib/perms";
@@ -40,8 +38,8 @@ export function NavDrawer({
 }) {
   const t = useT();
   const { user, logout } = useAuth();
-  const router = useRouter();
-  const pathname = usePathname();
+  const navigate = useNavigate();
+  const pathname = useLocation().pathname;
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on navigation — the sheet's own links change the route, and without
@@ -82,7 +80,7 @@ export function NavDrawer({
   async function doLogout() {
     onClose();
     await logout();
-    router.replace("/login");
+    navigate("/login", { replace: true });
   }
 
   // Same inset treatment as Modal.tsx's bottom sheet (see its comment): a small
@@ -127,7 +125,7 @@ export function NavDrawer({
             return (
               <Link
                 key={item.key}
-                href={routeFor(item.key)}
+                to={routeFor(item.key)}
                 onClick={onClose}
                 className={`${row} ${active ? "bg-bg text-ink font-semibold" : "text-ink"}`}
                 aria-current={active ? "page" : undefined}
@@ -146,7 +144,7 @@ export function NavDrawer({
           {can(user, "create_reservation") && <Bell variant="drawer" />}
 
           <Link
-            href="/settings"
+            to="/settings"
             onClick={onClose}
             className={`${row} ${
               isNavActive("settings", pathname) ? "bg-bg text-ink font-semibold" : "text-ink"

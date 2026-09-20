@@ -2,39 +2,38 @@
  * Tiny fetch wrapper for the FastAPI backend.
  *
  * Auth: the HttpOnly `bcr_session` cookie is the normal path — same-origin
- * (production) or same-host-different-port (dev, the launcher's LAN mode),
- * where `SameSite=Strict` still flows. The token is never written to
+ * (production) or same-host-different-port (dev), where `SameSite=Strict`
+ * still flows, because SameSite ignores the port. The token is never written to
  * `localStorage`/`sessionStorage` anymore (M9: an XSS payload that can read
  * disk used to just lift the session outright). The one case a token is
- * still kept, in memory only, is an explicit REMOTE `NEXT_PUBLIC_API_BASE`
- * (the old Vercel/Render split in DEPLOY.md) — a genuinely cross-site
+ * still kept, in memory only, is an explicit REMOTE `VITE_API_BASE` — a
+ * genuinely cross-site
  * deployment where the cookie cannot follow, so the Bearer header is the
  * only way auth works at all, and losing it on refresh is expected there.
  */
 /**
- * Where the API lives.
+ * Where the API lives. Three cases, in priority order:
  *
- * `NEXT_PUBLIC_API_BASE` is inlined by Next at BUILD time, so a value baked in
- * here cannot follow the host the page is actually served from. That is what
- * breaks LAN mode: a laptop opening `http://192.168.0.228:3000` downloads a
- * bundle pointing at `http://127.0.0.1:8001` and calls its own loopback.
+ *   unset / "same-origin"   THE DEFAULT, and what both dev and production use.
+ *                  Returns "" — every call site does `${apiBase()}${path}` and
+ *                  path already starts with "/api", so it resolves as a plain
+ *                  relative fetch. In production Nginx proxies /api to uvicorn;
+ *                  in development the Vite dev server proxies it (vite.config.ts).
+ *   <remote url>   an API on a genuinely different origin. Used verbatim, and
+ *                  it is the only case that turns on the in-memory Bearer token
+ *                  (see usesRemoteApi) because the cookie cannot follow there.
+ *   <loopback url> explicit escape hatch for running the frontend without the
+ *                  proxy. Note the host must MATCH the one in the address bar:
+ *                  a page on localhost:3000 talking to 127.0.0.1:8001 is
+ *                  cross-site as far as the cookie is concerned, and
+ *                  SameSite=Strict silently drops it — you get a clean login
+ *                  followed by 401s. Preferring the proxy avoids the whole trap.
  *
- * So when the page is served from a NON-loopback host we ignore the configured
- * host and reuse the page's own — same port, same protocol. One running server
- * then answers `localhost` and every LAN address at once, and a new DHCP lease
- * needs no rebuild. An explicit remote base (the Vercel/Render setup in
- * DEPLOY.md) is always honoured verbatim, and loopback visits keep using the
- * configured value so we never depend on how `localhost` resolves.
+ * `VITE_API_BASE` is inlined by Vite at BUILD time, so a production build made
+ * with it set to a dev value would ship that value.
  */
-const CONFIGURED_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
-const DEFAULT_API_PORT = "8001";
+const CONFIGURED_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 const LOOPBACK = /^(localhost|127(?:\.\d+){3}|\[?::1\]?)$/i;
-// The Phase 6 single-VPS deployment: Nginx proxies /api on the SAME origin as
-// the page (no separate port at all — unlike the launcher's LAN mode, which
-// really does put the API on a different port on the same host). A literal
-// "same-origin" opts out of the port-guessing logic below entirely: every
-// call site does `${apiBase()}${path}`, and path already starts with "/api",
-// so an empty base just resolves as a normal relative fetch.
 const SAME_ORIGIN = "same-origin";
 
 function configuredUrl(): URL | null {
@@ -46,18 +45,15 @@ function configuredUrl(): URL | null {
 }
 
 export function apiBase(): string {
-  if (CONFIGURED_BASE === SAME_ORIGIN) return "";
+  // Unset is same-origin, not a guessed localhost port: both servers that ever
+  // serve this app proxy /api for us.
+  if (!CONFIGURED_BASE || CONFIGURED_BASE === SAME_ORIGIN) return "";
 
   const u = configuredUrl();
   // A real remote API was configured — always use it as given.
   if (u && !LOOPBACK.test(u.hostname)) return CONFIGURED_BASE;
 
-  const port = u?.port || DEFAULT_API_PORT;
-  if (typeof window !== "undefined" && !LOOPBACK.test(window.location.hostname)) {
-    return `${window.location.protocol}//${window.location.hostname}:${port}`;
-  }
-  // Loopback visit, or SSR where there is no host to follow yet.
-  return CONFIGURED_BASE || `http://127.0.0.1:${port}`;
+  return CONFIGURED_BASE;
 }
 
 let authToken: string | null = null;

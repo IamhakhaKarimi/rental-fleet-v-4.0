@@ -2,26 +2,29 @@
   "name": "balkan-fleet-frontend",
   "version": "4.0.0",
   "private": true,
-  "description": "Balkan Car Rentals — Fleet Console v4.0 frontend (Next.js + Tailwind)",
+  "type": "module",
+  "description": "Balkan Car Rentals — Fleet Console v4.0 frontend (Vite + React + Tailwind)",
   "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
-    "start": "next start -p 3000",
-    "lint": "next lint"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 3000",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "14.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "react-router-dom": "^6.30.1",
     "recharts": "^3.9.0"
   },
   "devDependencies": {
     "@types/node": "20.16.11",
     "@types/react": "18.3.11",
     "@types/react-dom": "18.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "10.4.20",
     "postcss": "8.4.47",
     "tailwindcss": "3.4.14",
-    "typescript": "5.6.3"
+    "typescript": "5.6.3",
+    "vite": "^5.4.11"
   }
 }

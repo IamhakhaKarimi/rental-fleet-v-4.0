@@ -5,6 +5,9 @@
 *.db-wal
 *.db-journal
 *.bak
+*.bak-shm
+*.bak-wal
+*.bak-journal
 # Env files with real values (the *.example templates ARE committed).
 .env
 .env.*
@@ -32,15 +35,12 @@ env/
 
 # ───────────── Node / Next.js (frontend) ─────────────
 node_modules/
-.next/
-.next-dev/
 out/
 build/
 dist/
 .turbo/
 graphify-out/
 *.tsbuildinfo
-next-env.d.ts
 .vercel/
 
 # ───────────── OS / editor ─────────────

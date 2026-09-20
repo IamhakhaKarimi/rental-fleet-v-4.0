@@ -30,10 +30,9 @@ class Settings(BaseSettings):
     cookie_name: str = "bcr_session"
     cookie_secure: bool = False     # True behind HTTPS (production)
     # "strict" ships with the M9 cookie-only migration + CSRF Origin check
-    # (CLAUDE.md sequencing constraint). "none" needed for cross-site cookie
-    # (set secure too); the launcher's LAN mode is unaffected — SameSite
-    # ignores port, so a Strict cookie still flows between :3000 and :8001 on
-    # the same host.
+    # (CLAUDE.md sequencing constraint). It is correct for the same-origin VPS
+    # deployment and should stay that way; "none" would only be needed for a
+    # cross-site cookie, which the same-origin target exists to avoid.
     cookie_samesite: str = "strict"
     cookie_domain: str = ""         # empty => host-only cookie
 
@@ -75,16 +74,12 @@ class Settings(BaseSettings):
     # back to the first CORS origin when unset.
     app_base_url: str = ""
 
-    # CORS — comma-separated allow-list of frontend origins.
+    # CORS — comma-separated allow-list of frontend origins. On the single-VPS
+    # same-origin deployment the frontend and API share an origin, so CORS never
+    # fires in production; this matters only for `next dev` against a separately
+    # run API. Exact match only: there is deliberately no regex escape hatch, so
+    # no pattern can ever widen `allow_credentials=True` to a range of hosts.
     cors_origins: str = "http://localhost:3000"
-
-    # LAN mode, set by the desktop launcher's "Local WiFi network" button. Off
-    # by default so cloud deployments keep the strict exact-match allow-list.
-    # When on, any loopback port and any RFC-1918 address may call the API —
-    # a regex rather than an explicit origin because the host PC's address is a
-    # DHCP lease that can change between launches (and `allow_credentials=True`
-    # rules out the "*" wildcard entirely).
-    cors_allow_lan: bool = False
 
     # ── Rate limiting (L1–L3) ────────────────────────────────────────────────
     # See DOCUMENTATION.md §8.3. Three keyed layers share one token-bucket
@@ -147,21 +142,6 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    @property
-    def cors_origin_regex(self) -> str | None:
-        """Extra origin matcher for LAN mode; None keeps exact-match only."""
-        if not self.cors_allow_lan:
-            return None
-        return (
-            r"http://("
-            r"localhost"
-            r"|127\.\d{1,3}\.\d{1,3}\.\d{1,3}"
-            r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
-            r"|192\.168\.\d{1,3}\.\d{1,3}"
-            r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-            r")(?::\d{1,5})?$"
-        )
 
 
 settings = Settings()

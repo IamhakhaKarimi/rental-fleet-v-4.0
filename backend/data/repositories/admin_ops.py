@@ -8,6 +8,7 @@ fixed string literal — no f-string/identifier interpolation — so there is no
 dynamic-SQL surface at all. Returns the per-table counts removed.
 """
 from sqlalchemy import text, inspect
+from core import db as _db
 from core.db import get_engine
 
 # Tables included in a full backup, in PARENT-FIRST dependency order (so inserts on
@@ -124,7 +125,45 @@ def import_all(data: dict) -> dict:
                 text(f"INSERT INTO app_settings ({col_list}) VALUES ({placeholders})"),
                 {c: row[c] for c in cols},
             )
+        _resync_sequences(conn, insp)
     return counts
+
+
+def _resync_sequences(conn, insp) -> None:
+    """Postgres only: catch every SERIAL sequence up to the restored data.
+
+    The restore above re-inserts rows with their ORIGINAL primary keys. SQLite is
+    fine with that — AUTOINCREMENT derives the next id from MAX(rowid) at insert
+    time. Postgres does not: a sequence only advances when it is actually drawn
+    from, so supplying the id explicitly leaves it wherever it was. Restore a
+    backup with customers 1..40 into a fresh database and the sequence still reads
+    1, so the next new customer fails with `duplicate key value violates unique
+    constraint "customers_pkey"` — and keeps failing, once per row, until it has
+    crawled past 40.
+
+    The affected columns are discovered rather than listed: pg_get_serial_sequence
+    returns NULL for a column with no sequence, so a future table or a primary key
+    that stops being SERIAL needs no edit here. Runs inside the caller's
+    transaction, so a failure rolls the whole restore back.
+    """
+    if _db._dialect != "postgresql":
+        return
+    for tbl in BACKUP_TABLES:
+        for col in (c["name"] for c in insp.get_columns(tbl)):
+            seq = conn.execute(
+                text("SELECT pg_get_serial_sequence(:t, :c)"), {"t": tbl, "c": col}
+            ).scalar()
+            if not seq:
+                continue
+            # The third setval() argument is `is_called`: false on an empty table
+            # means the sequence hands out 1 next rather than 2.
+            conn.execute(
+                text(
+                    f"SELECT setval(:seq, COALESCE(MAX({col}), 1), MAX({col}) IS NOT NULL) "
+                    f"FROM {tbl}"
+                ),
+                {"seq": seq},
+            )
 
 
 def reset_finance() -> dict:

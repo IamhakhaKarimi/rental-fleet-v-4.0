@@ -1,4 +1,3 @@
-"use client";
 import { useT } from "@/lib/i18n";
 
 // STATUS_TOKEN (config/settings.py) — status -> design token class.

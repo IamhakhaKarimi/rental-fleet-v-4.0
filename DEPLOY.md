@@ -1,8 +1,10 @@
 # Deploying Balkan Car Rentals — Fleet Console v4.0
 
-**Architecture: single VPS, same-origin.** Nginx terminates TLS and serves the
-Next.js frontend at `/`, proxying `/api` to a single uvicorn process running
-the FastAPI backend, which talks to SQLite on local disk. See CLAUDE.md →
+**Architecture: single VPS, same-origin.** Nginx terminates TLS, serves the
+frontend as static files at `/`, and proxies `/api` to a single uvicorn process
+running the FastAPI backend, which talks to SQLite on local disk. The frontend
+is a Vite build, so **there is no Node process in production** — one systemd
+unit, not two. See CLAUDE.md →
 "Deployment Targets (Production)" for why this replaced the earlier
 Vercel + Render + Turso split (same-origin is a security requirement — it
 removes CORS entirely and is what makes the `HttpOnly` + `SameSite=Strict`
@@ -15,10 +17,9 @@ CLAUDE.md).
 | File | What it's for |
 |---|---|
 | `.env.production.example` | Backend `.env` — every knob in `backend/api/settings.py`, with the ones the boot guard actually requires called out |
-| `frontend/.env.production.example` | Frontend `.env.production` — one line, `NEXT_PUBLIC_API_BASE=same-origin` |
+| `frontend/.env.production.example` | Frontend `.env.production` — one line, `VITE_API_BASE=same-origin` |
 | `nginx/balkan-fleet.conf.example` | The Nginx same-origin config (TLS, `/api` proxy, L0 rate/connection limits, `X-Forwarded-For`) |
 | `nginx/balkan-fleet-api.service.example` | systemd unit for the backend (single uvicorn process — see the file for why) |
-| `nginx/balkan-fleet-web.service.example` | systemd unit for the frontend (`next start`) |
 
 ---
 
@@ -30,7 +31,7 @@ it does not need much CPU or RAM. You need:
 
 ```bash
 sudo apt update && sudo apt install -y python3.11-venv nginx certbot python3-certbot-nginx
-# Node 20+ for the frontend build — via nodesource or nvm, whichever you prefer
+# Node 20+ — needed to BUILD the frontend only; nothing Node runs at serve time
 ```
 
 Create a dedicated non-root user the systemd units run as:
@@ -89,17 +90,21 @@ curl -s http://127.0.0.1:8001/api/health # {"ok":true,"service":"balkan-fleet-ap
 
 ## 3 · Frontend
 
+The frontend is a static bundle. You build it once and Nginx serves the files —
+there is no service to enable and nothing listening on :3000.
+
 ```bash
 cd /opt/balkan-fleet/frontend
-sudo -u balkan-fleet npm install
-cp .env.production.example .env.production   # NEXT_PUBLIC_API_BASE=same-origin
-sudo -u balkan-fleet npm run build
+sudo -u balkan-fleet npm ci
+cp .env.production.example .env.production   # VITE_API_BASE=same-origin
+sudo -u balkan-fleet npm run build           # typechecks, then emits dist/
 
-sudo cp ../nginx/balkan-fleet-web.service.example /etc/systemd/system/balkan-fleet-web.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now balkan-fleet-web
-curl -s http://127.0.0.1:3000/ | head -c 200   # some HTML
+ls dist/index.html dist/assets/              # should exist
 ```
+
+`VITE_API_BASE` is inlined at BUILD time, so it must be in place *before*
+`npm run build`, not after. With it set to `same-origin` every API call is a
+plain relative `/api/...` fetch that Nginx proxies — no CORS, no port.
 
 ---
 
@@ -109,6 +114,9 @@ curl -s http://127.0.0.1:3000/ | head -c 200   # some HTML
 sudo cp ../nginx/balkan-fleet.conf.example /etc/nginx/sites-available/balkan-fleet.conf
 # edit server_name and the two ssl_certificate paths for your domain
 sudo ln -s /etc/nginx/sites-available/balkan-fleet.conf /etc/nginx/sites-enabled/
+# Also set `root` to your real path if you did not use /opt/balkan-fleet, and
+# make sure nginx can read it: the dist/ directory must be traversable by the
+# nginx user (www-data), not only by balkan-fleet.
 sudo nginx -t && sudo systemctl reload nginx
 
 # First cert issuance (certbot's Nginx plugin edits the file in place to add
@@ -138,22 +146,60 @@ exists on a fresh install.
 ```bash
 cd /opt/balkan-fleet && sudo -u balkan-fleet git pull
 cd backend  && sudo -u balkan-fleet .venv/bin/pip install -r requirements.txt
-cd ../frontend && sudo -u balkan-fleet npm install && sudo -u balkan-fleet npm run build
-sudo systemctl restart balkan-fleet-api balkan-fleet-web
+cd ../frontend && sudo -u balkan-fleet npm ci && sudo -u balkan-fleet npm run build
+sudo systemctl restart balkan-fleet-api
 ```
 
-`fleet.db` lives outside both service's build output, so restarting either
-service never touches it.
+Only the API restarts — the frontend is files on disk, live the moment the build
+finishes. Asset filenames are content-hashed, so a returning browser picks up the
+new build without a cache purge (the Nginx config marks `/assets/` immutable and
+`index.html` no-cache, which is what makes that safe).
+
+`fleet.db` lives outside the build output, so none of this touches it.
 
 ## Verifying the hardening actually took effect
 
+- Open the site, then **reload while on a sub-page** such as
+  `https://fleet.example.com/customers`, and open an invoice link directly.
+  Both must render, not 404. This is the single most likely thing to be wrong
+  after a first deploy: routing lives in the browser, so those paths exist on
+  no disk anywhere, and only the `try_files $uri $uri/ /index.html;` line in
+  the Nginx config makes them work. Clicking through to a page succeeds even
+  when it is missing — reloading is what exposes it.
 - `GET /internal/db-health` and `GET /internal/stats` (both `require_level(2)`
   — log in as an admin+ account, call with your session cookie) — confirm the
   dialect is `sqlite`, `is_remote` is `false`, and p95 latencies look sane.
 - `journalctl -u balkan-fleet-api -f` — the `db.sqlite_busy` counter in
   `/internal/stats`'s `events` is the §8.8 SQLite→Postgres migration trigger;
   it should stay at 0 under normal load. Migrate on evidence there, not on a
-  hunch (see the "Database" note in CLAUDE.md).
+  hunch (see the "Database" note in CLAUDE.md). The threshold is stated
+  concretely in DOCUMENTATION.md §8.8: **more than 10 events per hour sustained
+  across a working day.** Sample it at a fixed hour — the counter is in-process
+  and resets on restart, so the delta between two samples is the real number.
+
+### If you do migrate to Postgres later
+
+Set `DATABASE_URL=postgres://…` and restart. That genuinely is the migration —
+`core/db.py` carries a complete dual-dialect layer, and the four defects that
+would have bitten on the way across (backup-restore sequence desync, a
+`strftime` shim that returned unformatted input, a `DROP TABLE` missing
+`CASCADE`, and TLS forced even on a loopback connection) are fixed. Three
+things to know before you do:
+
+- **Put Postgres on this same VPS.** A managed remote instance would make the
+  app slower, not faster — DOCUMENTATION.md §8.11 measures one invoice PDF at
+  10 connection opens, which is free locally and 20–50 ms each over a network.
+  TLS is applied automatically for a remote host and skipped for a loopback one,
+  so a local install needs no SSL setup.
+- **Rehearse it first.** The migration was verified end to end against Postgres
+  16 — schema, migrations, shims, a full 962-row restore, and identical finance
+  figures on both engines (§8.8). Repeat that on your own data before switching:
+  export a backup, restore it into the new database, and compare the Finance page
+  against the SQLite one before you point the app at it.
+- **There is no schema-version tool.** Migrations are hand-rolled in
+  `core/db.py#init_db` and detect their own need by inspecting columns rather
+  than reading a version number. Adding Alembic is worth doing *before* the
+  schema next changes, not during the dialect switch.
 - Confirm `curl -I https://fleet.example.com/internal/stats` (no cookie) is
   blocked at the Nginx layer (404) before it even reaches the app's own
   permission check.

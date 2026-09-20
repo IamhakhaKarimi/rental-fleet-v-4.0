@@ -1,4 +1,3 @@
-"use client";
 import { memo, type ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 import { StatusBadge } from "@/components/StatusBadge";

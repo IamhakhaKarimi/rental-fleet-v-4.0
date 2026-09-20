@@ -1,4 +1,3 @@
-"use client";
 import { memo, useEffect, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
 

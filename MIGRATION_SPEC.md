@@ -3,6 +3,18 @@
 > **Balkan Car Rentals — Fleet Console v3.x → FastAPI + Next.js/Tailwind**
 > Single source of truth for porting the Streamlit app to a FastAPI backend + Next.js frontend. Same persistent DB (Neon Postgres in prod / SQLite local), **zero data migration**, full behavioral fidelity.
 
+> ⚠️ **HISTORICAL DOCUMENT — completed, and since superseded in two ways.** This spec
+> describes the Streamlit → Next.js port, which shipped. Two of its decisions no longer
+> hold and are **not** to be followed from here:
+>
+> - **The frontend is no longer Next.js.** It was migrated to Vite + React Router; the
+>   app had never used a Next-specific feature. See CLAUDE.md → "Recent Updates".
+> - **Deployment is not Vercel + Render + Neon.** It is a single VPS with Nginx,
+>   same-origin, SQLite on local disk. See `DEPLOY.md`.
+>
+> Kept for the behavioural inventory in the later sections, which is still accurate and
+> still the best description of what each screen must do.
+
 ---
 
 ## 0. Ground truth & terminology

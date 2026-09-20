@@ -1,6 +1,4 @@
-"use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiDel, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
@@ -106,16 +104,15 @@ const COMPENSATION_TYPES = [
   "other",
 ] as const;
 
-// Charts are recharts (3.x), which crashes SSR — load them client-only so the
-// server never evaluates recharts. See components/FinanceCharts.tsx.
+// Recharts is ~400kB raw / 115kB gzipped and only this page uses it, so it stays
+// in its own chunk, fetched the first time a chart actually renders. Each chart
+// is wrapped in <Suspense fallback={<ChartSkeleton />}> at its use site.
 const ChartSkeleton = () => <Skeleton className="h-[300px] w-full" />;
-const IncomeCostBarChart = dynamic(
-  () => import("@/components/FinanceCharts").then((m) => m.IncomeCostBarChart),
-  { ssr: false, loading: ChartSkeleton }
+const IncomeCostBarChart = lazy(() =>
+  import("@/components/FinanceCharts").then((m) => ({ default: m.IncomeCostBarChart }))
 );
-const IncomeSharePieChart = dynamic(
-  () => import("@/components/FinanceCharts").then((m) => m.IncomeSharePieChart),
-  { ssr: false, loading: ChartSkeleton }
+const IncomeSharePieChart = lazy(() =>
+  import("@/components/FinanceCharts").then((m) => ({ default: m.IncomeSharePieChart }))
 );
 
 const cents = (euros: number) => euros / 100;
@@ -638,11 +635,13 @@ function PnlTab({
         {data.length === 0 ? (
           <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
         ) : (
-          <IncomeCostBarChart
-            data={data}
-            incomeLabel={tx("col_income", "Income")}
-            costLabel={tx("col_cost", "Cost")}
-          />
+          <Suspense fallback={<ChartSkeleton />}>
+            <IncomeCostBarChart
+              data={data}
+              incomeLabel={tx("col_income", "Income")}
+              costLabel={tx("col_cost", "Cost")}
+            />
+          </Suspense>
         )}
       </div>
 
@@ -819,15 +818,17 @@ function MonthlyDashboard({
         {data.length === 0 ? (
           <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
         ) : (
-          <IncomeCostBarChart
-            data={data}
-            incomeLabel={tx("col_income", "Income")}
-            costLabel={tx("col_cost", "Cost")}
-            incomeColor="var(--fin-chart-income)"
-            costColor="var(--fin-chart-cost)"
-            xTickFormatter={monthShort}
-            currentLabel={tx("fin_current_period", "Current")}
-          />
+          <Suspense fallback={<ChartSkeleton />}>
+            <IncomeCostBarChart
+              data={data}
+              incomeLabel={tx("col_income", "Income")}
+              costLabel={tx("col_cost", "Cost")}
+              incomeColor="var(--fin-chart-income)"
+              costColor="var(--fin-chart-cost)"
+              xTickFormatter={monthShort}
+              currentLabel={tx("fin_current_period", "Current")}
+            />
+          </Suspense>
         )}
       </div>
 
@@ -863,7 +864,9 @@ function VehicleTab({
         {pie.length === 0 ? (
           <div className="text-sm text-muted py-6 text-center">{tx("no_data", "No data yet.")}</div>
         ) : (
-          <IncomeSharePieChart pie={pie} />
+          <Suspense fallback={<ChartSkeleton />}>
+            <IncomeSharePieChart pie={pie} />
+          </Suspense>
         )}
       </div>
 

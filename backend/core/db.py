@@ -91,11 +91,34 @@ def _remote_db_url() -> str:
     return urlunsplit((scheme, p.netloc, p.path, "", ""))  # drop query + fragment
 
 
+# Hosts for which TLS is pointless rather than merely optional: the connection
+# never leaves the machine, so there is no network segment for anyone to observe.
+# An EMPTY netloc means a unix-domain socket, which is the same situation.
+_LOCAL_PG_HOSTS = frozenset({"", "localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def _is_local_pg_host(url: str) -> bool:
+    """True when a Postgres URL points at this same machine.
+
+    Deliberately conservative: anything that is not recognisably loopback is
+    treated as remote and therefore gets TLS. A hostname that merely RESOLVES to
+    127.0.0.1 is not matched, because resolution can change under us and the cost
+    of being wrong is an unencrypted connection over a real network.
+    """
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in _LOCAL_PG_HOSTS
+
+
 def get_engine() -> Engine:
     """Return a single shared engine for the whole app.
 
-    Uses a persistent Postgres database when DATABASE_URL is configured (production
-    on Streamlit Cloud); otherwise the local SQLite file (dev)."""
+    Uses a persistent Postgres database when DATABASE_URL is configured; otherwise
+    the local SQLite file, which is the default for both dev and the single-VPS
+    deployment (see DOCUMENTATION.md 8.8)."""
     global _engine, _dialect, _is_remote
     if _engine is None:
         url = _remote_db_url()
@@ -103,10 +126,20 @@ def get_engine() -> Engine:
             # pool_pre_ping: serverless DBs (Neon free tier, Turso) suspend idle
             # connections; pre-ping silently reconnects instead of erroring.
             if url.startswith("postgresql"):
-                import ssl
+                # TLS for anything crossing a network, none for a loopback or
+                # unix-socket server. The query string carrying `sslmode` was
+                # already stripped by _remote_db_url, so this is the only place
+                # that decides. Forcing TLS unconditionally would rule out the
+                # RECOMMENDED migration target -- Postgres on this same VPS,
+                # which normally ships with SSL off -- and gain nothing there,
+                # since the traffic never leaves the machine.
+                connect_args = {}
+                if not _is_local_pg_host(url):
+                    import ssl
+                    connect_args["ssl_context"] = ssl.create_default_context()
                 _engine = create_engine(
                     url, future=True, pool_pre_ping=True,
-                    connect_args={"ssl_context": ssl.create_default_context()},
+                    connect_args=connect_args,
                 )
                 _dialect = "postgresql"
             else:
@@ -237,12 +270,23 @@ _PG_SHIMS = [
     """CREATE OR REPLACE FUNCTION datetime(t text) RETURNS text AS $$
        SELECT to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS') $$
        LANGUAGE sql""",
+    # strftime() raises on an unrecognised format instead of returning the input.
+    # A silent passthrough is the worst available failure mode: an unhandled format
+    # would bucket by the full timestamp on Postgres and by the intended unit on
+    # SQLite — the same query returning different numbers on the two dialects, with
+    # no error anywhere to notice. Add a WHEN branch when a new format is needed.
     """CREATE OR REPLACE FUNCTION strftime(fmt text, t text) RETURNS text AS $$
-       SELECT CASE fmt
-                WHEN '%Y-%m'    THEN substr(t, 1, 7)
-                WHEN '%Y'       THEN substr(t, 1, 4)
-                WHEN '%Y-%m-%d' THEN substr(t, 1, 10)
-                ELSE t END $$ LANGUAGE sql IMMUTABLE""",
+       BEGIN
+         CASE fmt
+           WHEN '%Y-%m'    THEN RETURN substr(t, 1, 7);
+           WHEN '%Y'       THEN RETURN substr(t, 1, 4);
+           WHEN '%Y-%m-%d' THEN RETURN substr(t, 1, 10);
+           ELSE RAISE EXCEPTION
+             'strftime(): unsupported format %. The Postgres compatibility shim in '
+             'core/db.py implements only %%Y, %%Y-%%m and %%Y-%%m-%%d. Add a WHEN '
+             'branch there rather than returning the value unformatted.', fmt;
+         END CASE;
+       END $$ LANGUAGE plpgsql IMMUTABLE""",
 ]
 
 
@@ -346,7 +390,16 @@ def _migrate_users():
     if cols and "full_name" not in cols:
         if _is_remote:
             with get_engine().begin() as conn:
-                conn.execute(text("DROP TABLE IF EXISTS users"))
+                # CASCADE on Postgres: `sessions` and `password_resets` reference
+                # users logically but declare no FK today, so a bare DROP happens
+                # to work — on luck, not design. The day one of them gains a real
+                # REFERENCES clause, a bare DROP starts failing mid-migration with
+                # the schema half-applied. Turso/libSQL is SQLite and rejects the
+                # keyword, hence the dialect split.
+                if _dialect == "postgresql":
+                    conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+                else:
+                    conn.execute(text("DROP TABLE IF EXISTS users"))
         else:
             import sqlite3
             con = sqlite3.connect(str(DB_PATH))

@@ -1,4 +1,3 @@
-"use client";
 import { useEffect, useState } from "react";
 import { useLocalStorageState } from "./useLocalStorageState";
 import type { ViewMode } from "@/components/ViewToggle";

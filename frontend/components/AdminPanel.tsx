@@ -1,4 +1,3 @@
-"use client";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";

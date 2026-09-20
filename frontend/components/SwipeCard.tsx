@@ -1,4 +1,3 @@
-"use client";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT } from "@/lib/i18n";
 

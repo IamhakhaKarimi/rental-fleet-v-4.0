@@ -1,4 +1,3 @@
-"use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiGet } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";

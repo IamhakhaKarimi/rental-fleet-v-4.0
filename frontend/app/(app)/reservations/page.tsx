@@ -20,6 +20,7 @@ import { RefreshIcon } from "@/components/RefreshIcon";
 import { ViewToggle } from "@/components/ViewToggle";
 import { useResponsiveView } from "@/lib/useResponsiveView";
 import { SwipeDeck } from "@/components/SwipeCard";
+import { Skeleton } from "@/components/Skeleton";
 
 type TLRange = "week" | "month" | "two_month" | "all_months";
 
@@ -150,7 +151,36 @@ export default function ReservationsPage() {
             />
           </div>
         </div>
-        {view === "cards" ? (
+        {isLoading && rentals.length === 0 ? (
+          view === "cards" ? (
+            <div className="flex gap-4 overflow-hidden">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="card p-3 space-y-2 w-[260px] sm:w-[280px] shrink-0">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-3 w-3/4" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <tr key={i} className="border-b border-line last:border-0">
+                      {Array.from({ length: 8 }).map((__, j) => (
+                        <td className="p-2.5" key={j}>
+                          <Skeleton className="h-4 w-full" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : view === "cards" ? (
           <SwipeDeck
             items={filtered}
             keyOf={(r) => r.deal_id}

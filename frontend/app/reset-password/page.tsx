@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, apiGet, apiPost } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { BusinessInfo } from "@/lib/types";
+import { Skeleton } from "@/components/Skeleton";
 
 interface PasswordPolicy {
   min_length: number;
@@ -127,7 +128,11 @@ function ResetPasswordInner() {
               </button>
             </div>
           ) : valid === null ? (
-            <div className="text-sm text-muted">{tf("loading", "Loading…")}</div>
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
           ) : !valid ? (
             <div className="space-y-4">
               <div className="text-sm text-danger flex items-start gap-2">

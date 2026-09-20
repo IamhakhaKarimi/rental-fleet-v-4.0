@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
+import { Skeleton } from "@/components/Skeleton";
 
 // English fallback when a key isn't in the dictionary.
 const f = (t: (k: string) => string, key: string, fb: string) =>
@@ -120,7 +121,10 @@ export default function Page({ params }: { params: { dealId: string } }) {
       {err && !metaLoading ? (
         <div className="card p-6 text-sm text-danger">{err}</div>
       ) : metaLoading ? (
-        <div className="text-sm text-muted">{f(t, "loading", "Loading…")}</div>
+        <div className="space-y-2">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-1/3" />
+        </div>
       ) : (
         <>
           {/* Language selector */}
@@ -164,8 +168,11 @@ export default function Page({ params }: { params: { dealId: string } }) {
           {/* Embedded preview */}
           <div className="card p-2 relative">
             {previewLoading && (
-              <div className="absolute inset-0 grid place-items-center bg-bg/60 z-10 text-sm text-muted">
-                {f(t, "loading", "Loading…")}
+              <div className="absolute inset-0 bg-bg/60 z-10 p-4 space-y-2">
+                <Skeleton className="h-8 w-2/3" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-5/6" />
+                <Skeleton className="h-40 w-full" />
               </div>
             )}
             <iframe

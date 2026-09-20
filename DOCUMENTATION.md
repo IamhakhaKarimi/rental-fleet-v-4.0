@@ -890,62 +890,45 @@ Known keys: `business_name`, `business_phone`, `business_email`, `business_addre
 
 ## 6. Deployment
 
-### Running on the local network
+### Removed: the desktop launcher and LAN hosting
 
-For an office where a handful of staff share one machine's app, `start.bat` boots
-`launcher/launcher.py` — a stdlib HTTP server on `127.0.0.1:8800` that serves the
-repo-root `index.html` and supervises both servers. It binds loopback only: it can start
-and stop processes, so it is never exposed to the network whatever mode the app runs in.
+Earlier versions shipped `launcher/launcher.py` — a stdlib HTTP server on
+`127.0.0.1:8800` that served a control page with a "Local WiFi network" button, binding
+both servers to `0.0.0.0` so staff devices on the same router could reach the app.
 
-| Mode | API | Web | Extra env |
-|---|---|---|---|
-| This PC only | `--host 127.0.0.1` | `next dev -H 127.0.0.1` | — |
-| Local WiFi network | `--host 0.0.0.0` | `next start -H 0.0.0.0` | `CORS_ALLOW_LAN=1`, `APP_BASE_URL=http://<ip>:3000` |
+**All of it was deleted when the project moved to a VPS.** Removed: `launcher/`,
+`start.bat`, `stop.bat`, the repo-root `index.html`, `render.yaml`, and
+`backend/api/.env.example`. Removed with them:
 
-LAN mode runs a **production build** because `next dev` is too slow and memory-hungry
-for several concurrent users. The build is done once and reused — see below for why it
-is not tied to an IP.
+- `CORS_ALLOW_LAN` and `settings.cors_origin_regex`. The regex matched loopback on any
+  port plus all three RFC-1918 ranges, and `allow_credentials=True` meant every origin
+  it spanned could carry the session cookie. It also backed the CSRF Origin check in
+  `middleware._origin_allowed`, which is the *server's* own guard — nothing the browser
+  enforces — so anything it admitted was admitted for real. That check is now exact
+  match against `cors_origin_list` + `app_base_url`.
+- The boot guard in `api/main.py` that refused to start with `CORS_ALLOW_LAN=1` alongside
+  `COOKIE_SECURE=true`. There is no longer a flag for it to guard.
+- The loopback-follow branch of `lib/api.ts#apiBase()`, which read
+  `window.location.hostname` so one build could serve both `localhost` and a
+  DHCP-assigned LAN address.
+- `NEXT_DIST_DIR` in `next.config.mjs` — only the launcher ever set it.
 
-**Four gates have to open together, or the app looks fine and then fails on login:**
-
-1. **Bind address** — uvicorn defaults to loopback; LAN mode passes `--host 0.0.0.0`.
-2. **Frontend API base** — `NEXT_PUBLIC_API_BASE` is inlined by Next at *build* time, so
-   a baked-in `127.0.0.1` would make a visiting laptop call its own loopback.
-   `lib/api.ts` therefore resolves at runtime: when the page is served from a
-   **non-loopback** host it reuses `window.location.hostname` with the API port. One
-   running server answers `localhost` and every LAN address at once, and a new DHCP
-   lease needs no rebuild. An explicitly configured *remote* base (the Vercel/Render
-   setup above) is still honoured verbatim, so production is unaffected.
-3. **CORS** — the allow-list is exact-match and `allow_credentials=True` rules out `*`.
-   `CORS_ALLOW_LAN=1` adds `settings.cors_origin_regex`, matching loopback on any port
-   plus the three RFC-1918 ranges. **Default off**, so cloud deployments keep the strict
-   list.
-4. **Windows Firewall** — `launcher/allow-firewall.bat` adds inbound TCP 3000/8001 rules
-   scoped to `profile=private`. It needs Administrator; the launcher's button raises the
-   UAC prompt rather than applying anything silently.
-
-Cookie flags need no change: `cookie_secure=False` / `samesite=lax` are already fine over
-plain http on a LAN, and auth rides on the Bearer header anyway. Do **not** copy
-`render.yaml`'s `COOKIE_SECURE=true` / `COOKIE_SAMESITE=none` into a LAN `.env` — the
-cookie would be dropped silently.
-
-One behaviour change worth knowing: `_is_local_dev()` in `api/routers/auth.py` returns
-`False` for LAN clients, so the password-reset `debug_link` is suppressed for them.
-
-**Concurrency and the database.** SQLite is the right choice at this scale — one writer,
-many concurrent readers, and an office's booking rate is nowhere near the limit. Keep
-`backend/fleet.db` on the host's **local disk**; SQLite over SMB or a OneDrive-synced
-folder can corrupt under concurrent writes. The host machine must stay awake, and
-everyone must be on the same router — there is no internet exposure and no port
-forwarding.
+Recover from git if the LAN mode is ever wanted again, but do not re-enable the origin
+regex on a public host.
 
 ### Production Stack
 
-| Layer | Recommended Service |
+Single VPS, same origin. See `DEPLOY.md` for the runbook and `nginx/` for the config.
+
+| Layer | Service |
 |---|---|
-| Database | Turso (libSQL, free tier) or Neon (Postgres) |
-| Backend | Render or Railway (Docker; `backend/Dockerfile`) |
-| Frontend | Vercel (auto-detects Next.js; root dir: `frontend/`) |
+| Database | SQLite on local VPS disk (Postgres via `DATABASE_URL` — see §8.8) |
+| Backend | uvicorn, **single process**, proxied at `/api` |
+| Frontend | `next start`, proxied at `/` by Nginx |
+| Edge | Nginx — TLS, `limit_req`/`limit_conn`, `client_max_body_size` |
+
+Same origin is a security requirement, not a convenience: it removes CORS entirely and
+is what lets the `HttpOnly` session cookie work.
 
 ### Backend Dockerfile
 
@@ -1025,17 +1008,20 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001
 
 ## 8. Security & Runtime Hardening
 
-> ## STATUS — Phases 0–3 shipped, 4–6 outstanding
+> ## STATUS — Phases 0–6 shipped
 >
-> **Shipped:** the event-loop fix (C2), upload/body caps (H2), the JWT boot guard
-> (C1), the db-health leak (H4), security headers (M1), proxy-aware client IPs (M2),
-> the L1–L3 rate limiter, and the L4 concurrency semaphores. All verified by
-> measurement — see 8.11.
+> **Shipped:** the event-loop fix (C2), the JWT boot guard (C1), the env-seeded
+> bootstrap admin (C3 — there is no `admin`/`admin` anymore), `jti` session
+> revocation (H1), upload/body caps (H2), `(username, ip)` lockout with exponential
+> backoff (H3), the db-health leak (H4), security headers (M1), proxy-aware client
+> IPs (M2), the L1–L3 rate limiter, the L4 concurrency semaphores, the `HttpOnly`
+> cookie + CSRF Origin check (M9), request-scoped read connections (M3), server-side
+> pagination (M5), batched fleet thumbnails (M6), and the single-VPS Nginx/systemd
+> deployment config. M8 was resolved by deleting the LAN CORS regex outright.
+> All verified by measurement — see 8.11.
 >
-> **NOT yet shipped:** session revocation (H1), the `admin`/`admin` bootstrap (C3),
-> the lockout DoS (H3), the cookie migration + CSRF check (M9), and the performance
-> work in 8.6. **The app is still not ready for public exposure** — C3 and H1 alone
-> are disqualifying. Treat the current build as safe on a trusted LAN.
+> **Still outstanding:** the pytest suite scoped to Phase 4 auth behaviour (`httpx`
+> is not installed in this environment).
 >
 > Each item is tagged `[ ]` (outstanding) or `[x]` (shipped). Keep the tags current.
 
@@ -1105,8 +1091,8 @@ Ranked by severity. File references are to the state of the code at the time of 
 | M5 | `[x]` | ~~No pagination on the vehicles / customers / rentals list endpoints~~ — scoped to the two genuinely unbounded-growth lists, vehicles and customers (rentals/active is naturally capped by fleet size; rentals/all feeds Timeline's Gantt chart and CSV/PDF exports, which need every row and were deliberately left alone). `GET /api/vehicles` and `GET /api/customers` gained optional `page`/`page_size` — `page_size=0` (default) is byte-identical to the old unbounded response, so every existing caller (card/carousel views, mobile, `active`/`counts` shortcuts) is unaffected; `page_size>0` slices post-filter and reports the true count via `X-Total-Count`. Frontend: `lib/usePagedTable.ts` + `components/Pagination.tsx`, wired into the **table view only** of Fleet and Customers — the card/carousel views, quick-find dropdown, and inactive-customers list all keep their own full-list fetch untouched, since pagination there would have visibly broken the swipe-through-everything UX. Verified live in the browser (login, table render, empty-state, thumbs-batch all composing correctly) plus a raw HTTP page-slice check confirming non-overlapping pages and an unchanged unbounded default. | `api/routers/vehicles.py`, `api/routers/customers.py`, `frontend/lib/usePagedTable.ts`, `frontend/components/Pagination.tsx` |
 | M6 | `[x]` | ~~N+1 thumbnails~~ — new `GET /api/vehicles/thumbs/batch?ids=...` (`vehicle_photos.py#primary_photos_for`, one windowed query for N vehicles) + frontend `lib/useVehicleThumbs.ts` hook, wired into Fleet and Dashboard so a full card list issues ONE batched request instead of one per card. `VehicleThumb` keeps its old per-vehicle lazy fetch as a fallback for standalone use (`src` prop omitted). Verified: SQL tie-break matches the old single-vehicle query, and a full login→cookie-session→batch-endpoint round trip over real HTTP against an isolated DB copy. | `routers/vehicles.py`, `data/repositories/vehicle_photos.py`, `frontend/lib/useVehicleThumbs.ts` |
 | M7 | `[ ]` | `busy_timeout = 5000` lets a request pin a thread for a full 5 seconds under write contention, doing nothing. | `core/db.py:126` |
-| M8 | `[ ]` | `CORS_ALLOW_LAN=1` admits **any** RFC-1918 origin with `allow_credentials=True`. Acceptable for the launcher's LAN mode; must never be enabled on a public host. | `api/settings.py:77` |
-| M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote `NEXT_PUBLIC_API_BASE`. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. LAN mode verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
+| M8 | `[x]` | ~~`CORS_ALLOW_LAN=1` admits **any** RFC-1918 origin with `allow_credentials=True`~~ — **resolved by deletion.** The flag and `settings.cors_origin_regex` were removed with the desktop launcher; CORS and the CSRF Origin check are now exact-match only, with no regex form to enable. See §6 "Removed: the desktop launcher and LAN hosting". | `api/settings.py`, `api/main.py`, `api/middleware.py` |
+| M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote `NEXT_PUBLIC_API_BASE`. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. Split-port dev verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
 
 #### Verified sound — do not "fix" these
 
@@ -1217,8 +1203,8 @@ from one origin, the token becomes an `HttpOnly`, `Secure`, `SameSite=Strict` co
 unreadable by any script. `SameSite=Strict` plus an `Origin` header check covers CSRF
 (M9) without a token-exchange dance.
 
-The Bearer path is **retained for LAN and dev mode only**, where the launcher serves the
-frontend and API on different origins and cookies are genuinely awkward. This is why
+The Bearer path is **retained for an explicitly remote `NEXT_PUBLIC_API_BASE` only** —
+a genuinely cross-site deployment where the cookie cannot follow at all. This is why
 M9 and Part 2 must ship together: enabling cookie auth without the Origin check trades
 an XSS hole for a CSRF hole.
 
@@ -1248,7 +1234,7 @@ these numbers.
 
 | Knob | Governs | Notes |
 |---|---|---|
-| `RATE_LIMIT_ENABLED` | Master switch | Off for LAN/dev, on in production |
+| `RATE_LIMIT_ENABLED` | Master switch | Off for local dev, on in production |
 | `RATE_LIMIT_IP_*` | L1 token bucket rate + burst | |
 | `RATE_LIMIT_ACCOUNT_*` | L2 per-account rate + burst | |
 | `RATE_LIMIT_COST_*` | L3 per-class budgets | One per cost class |
@@ -1283,9 +1269,69 @@ on Postgres. Setting `DATABASE_URL=postgres://…` genuinely is the migration.
 particular the rate limiter stays in-process (8.3) rather than becoming a table.
 
 **Migrate when measured, not when it feels slow.** The trigger is `SQLITE_BUSY` /
-lock-wait events crossing a defined threshold in the monitoring added in Phase 2.
-SQLite's single-writer lock is the real ceiling; concurrent *reads* are unaffected by
-it, so read slowness is evidence for 8.6, **not** evidence for migrating.
+lock-wait events in the monitoring added in Phase 2. SQLite's single-writer lock is the
+real ceiling; concurrent *reads* are unaffected by it, so read slowness is evidence for
+8.6, **not** evidence for migrating.
+
+**The threshold, stated concretely** — a previous revision of this section said "a
+defined threshold" and never defined it, which is not a trigger, it is a deferral:
+
+| `db.sqlite_busy` at `/internal/stats` | Read as |
+|---|---|
+| **0–2 per day** | Noise. Normal. Do nothing. |
+| **> 10 per hour, sustained across a full working day** | The trigger. Plan the migration. |
+| **> 100 in an hour, or any user-visible write failure** | Act now, out of band. |
+
+Sample the counter at a fixed hour daily, because it is a **monotonic in-process
+counter**: it resets whenever uvicorn restarts, so the meaningful figure is the
+*delta* between two samples, never the absolute value. One busy spike that coincides
+with a backup import is not the trigger — imports hold the write lock by design.
+
+**Migrate to Postgres on the same box, not to a managed remote one.** §8.11 measures
+an invoice PDF at 10 connection opens; over a unix socket those stay sub-millisecond,
+while a managed provider turns each into a 20–50 ms round-trip and makes the 201 ms
+PDF several times slower. The single-writer ceiling is what Postgres fixes; network
+latency is what it would cost, and only a local instance avoids paying it.
+
+**Four latent defects were fixed ahead of any migration** — each harmless on SQLite
+and each a real failure on Postgres. All four were found by rehearsing the migration
+against a real Postgres 16, not by reading:
+
+1. **Backup restore desynced every sequence.** `admin_ops.import_all()` re-inserts rows
+   with their original primary keys, which does not advance a Postgres sequence, so the
+   first insert after any restore collided. Reproduced exactly:
+   `duplicate key value violates unique constraint "customers_pkey"`.
+   `admin_ops._resync_sequences()` now runs `setval()` inside the restore transaction,
+   discovering the affected columns through `pg_get_serial_sequence` rather than a
+   hardcoded list, so a new table or a key that stops being SERIAL needs no edit.
+2. **The `strftime` shim returned its input unchanged** for any format it did not
+   recognise — so a new format string would have produced *different numbers* on the
+   two dialects with no error anywhere. It now raises, naming the offending format.
+3. **`_migrate_users()` dropped the users table without `CASCADE`**, which survives only
+   because nothing currently declares a foreign key to it. Now dialect-split.
+4. **TLS was forced on every Postgres connection**, which made the recommended target —
+   Postgres on this same VPS — impossible to connect to at all (`Server refuses SSL`), a
+   local server normally having TLS off. `get_engine()` now skips the SSL context only
+   for a loopback host or a unix socket (`_is_local_pg_host`), and still requires TLS for
+   anything reachable over a network. Conservative by construction: a hostname that
+   merely *resolves* to 127.0.0.1 is treated as remote, because resolution can change
+   and the cost of guessing wrong is an unencrypted connection.
+
+**Verified, not merely reasoned** (Postgres 16, a full rehearsal):
+
+- Schema, all five migrations and both `_PG_SHIMS` apply to an empty database.
+- `datetime('now')` and all three supported `strftime` formats return the SQLite values;
+  an unsupported format raises `P0001` instead of passing through.
+- The full production dataset (962 rows across 10 tables) exported from SQLite and
+  restored into Postgres, with a post-restore insert then succeeding.
+- **Dialect parity on real data**: `revenue_by_month`, `revenue_by_year`, `pnl_by_month`,
+  `pnl_summary`, `revenue_summary`, `cost_by_month` and `cost_by_year` return byte-identical
+  results on both engines.
+
+What that rehearsal did *not* cover: the `_migrate_users()` CASCADE path (it needs a
+pre-Phase-1 database to trigger at all), and performance — parity was checked for
+correctness, not for latency. There is still no schema-version tool; migrations detect
+their own need by inspecting columns.
 
 **Shipped (Phase 6):** the trigger is now a real counter, not just a comment
 promising one. `core/db.py#_instrument_sqlite_busy` attaches a SQLAlchemy
@@ -1319,7 +1365,7 @@ had no way to express "same origin, no port" — with `NEXT_PUBLIC_API_BASE`
 unset it fell back to `https://domain:8001`, bypassing Nginx and hitting a
 port that isn't publicly exposed. A new `NEXT_PUBLIC_API_BASE=same-origin`
 literal makes every API call a plain relative fetch instead (verified against
-all four modes: same-origin, LAN, remote split-host, local dev — see
+all three remaining modes: same-origin, remote split-host, local dev — see
 `frontend/.env.production.example`).
 
 ### 8.10 Phased Rollout & Verification

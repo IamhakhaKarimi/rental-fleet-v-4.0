@@ -153,7 +153,34 @@ service never touches it.
 - `journalctl -u balkan-fleet-api -f` — the `db.sqlite_busy` counter in
   `/internal/stats`'s `events` is the §8.8 SQLite→Postgres migration trigger;
   it should stay at 0 under normal load. Migrate on evidence there, not on a
-  hunch (see the "Database" note in CLAUDE.md).
+  hunch (see the "Database" note in CLAUDE.md). The threshold is stated
+  concretely in DOCUMENTATION.md §8.8: **more than 10 events per hour sustained
+  across a working day.** Sample it at a fixed hour — the counter is in-process
+  and resets on restart, so the delta between two samples is the real number.
+
+### If you do migrate to Postgres later
+
+Set `DATABASE_URL=postgres://…` and restart. That genuinely is the migration —
+`core/db.py` carries a complete dual-dialect layer, and the four defects that
+would have bitten on the way across (backup-restore sequence desync, a
+`strftime` shim that returned unformatted input, a `DROP TABLE` missing
+`CASCADE`, and TLS forced even on a loopback connection) are fixed. Three
+things to know before you do:
+
+- **Put Postgres on this same VPS.** A managed remote instance would make the
+  app slower, not faster — DOCUMENTATION.md §8.11 measures one invoice PDF at
+  10 connection opens, which is free locally and 20–50 ms each over a network.
+  TLS is applied automatically for a remote host and skipped for a loopback one,
+  so a local install needs no SSL setup.
+- **Rehearse it first.** The migration was verified end to end against Postgres
+  16 — schema, migrations, shims, a full 962-row restore, and identical finance
+  figures on both engines (§8.8). Repeat that on your own data before switching:
+  export a backup, restore it into the new database, and compare the Finance page
+  against the SQLite one before you point the app at it.
+- **There is no schema-version tool.** Migrations are hand-rolled in
+  `core/db.py#init_db` and detect their own need by inspecting columns rather
+  than reading a version number. Adding Alembic is worth doing *before* the
+  schema next changes, not during the dialect switch.
 - Confirm `curl -I https://fleet.example.com/internal/stats` (no cookie) is
   blocked at the Nginx layer (404) before it even reaches the app's own
   permission check.

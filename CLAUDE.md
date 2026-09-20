@@ -15,19 +15,9 @@ This file is Claude Code guidance for the **Balkan Car Rentals — Fleet Console
 
 ## How to Run Locally
 
-### The launcher (preferred on Windows)
-
-Double-click `start.bat` → boots `launcher/launcher.py` on `127.0.0.1:8800` → serves the
-repo-root `index.html`, which has two buttons:
-
-- **This PC only** — API on `127.0.0.1`, `next dev -H 127.0.0.1`.
-- **Local WiFi network** — API on `0.0.0.0`, `next start -H 0.0.0.0` (production build),
-  `CORS_ALLOW_LAN=1`. Shows the `http://<lan-ip>:3000` address + QR for staff devices.
-
-The launcher owns both child processes (`taskkill /T` on stop — `/T` matters, npm spawns
-a node child), tails their output into the page, and refuses to start when a port is
-already taken. See DOCUMENTATION.md → "Running on the local network" for the four gates
-LAN mode has to open.
+Two terminals. There is no launcher — it was removed when the project moved to a VPS
+deployment, along with the LAN-hosting code paths (`CORS_ALLOW_LAN` and the RFC-1918
+origin regex no longer exist; see "Security & Runtime Hardening" below).
 
 ### Backend (FastAPI)
 
@@ -91,12 +81,12 @@ backend/
 | `backend/api/monitoring.py` | Loggers + `stats` (per-route p50/p95, served at `/internal/stats`) |
 | `backend/tools/bench_*.py` | Phase 0 benchmark harness — re-run after every hardening phase |
 | `backend/config/roles.py` | 4 roles × 25 permissions, `can(user, perm)` |
-| `backend/core/db.py` | Engine init (SQLite / Turso libSQL / Neon Postgres), `init_db()`, migrations |
+| `backend/core/db.py` | Engine init (SQLite / Turso libSQL / Postgres), `init_db()`, migrations, `_PG_SHIMS` |
 | `backend/core/schema.sql` | 11 tables, 9 indexes |
 | `backend/services/auth_service.py` | Password hashing, login, temp password |
 | `backend/services/scheduling_service.py` | Availability check, return window |
 | `backend/ui/invoice_links.py` | QR payloads + per-QR guided action buttons |
-| `frontend/lib/api.ts` | Fetch wrapper + Bearer JWT auth |
+| `frontend/lib/api.ts` | Fetch wrapper; `apiBase()` (same-origin / remote / loopback) + HttpOnly-cookie auth |
 | `frontend/lib/auth.tsx` | `useAuth()` context |
 | `frontend/lib/i18n.tsx` | `useT()` i18n context |
 | `frontend/lib/toast.tsx` | `useToast()` — portal-rendered success/error/info toasts |
@@ -113,9 +103,7 @@ backend/
 | `frontend/components/DateField.tsx` | The app's single date input (replaces `type="date"`) |
 | `frontend/components/TimeSelect24.tsx` | The app's single time input — same trigger as `DateField` |
 | `backend/services/permissions_service.py` | Stored role/permission overrides + scope guards |
-| `launcher/launcher.py` | Desktop launcher — serves `index.html`, supervises both servers, LAN mode |
-| `index.html` | The launcher page (repo root); `__LAUNCHER_TOKEN__` is substituted at serve time |
-| `launcher/allow-firewall.bat` | Private-profile inbound rules for 3000/8001 (needs UAC) |
+| `nginx/` | Production Nginx config + the two systemd units |
 | `backend/api/routers/admin_panel.py` | `/api/admin/permissions` — the role matrix |
 | `frontend/components/AdminPanel.tsx` | Admin Panel UI — mounted as Settings → Roles, not a route |
 
@@ -124,7 +112,10 @@ backend/
 ## Database
 
 - **Dev:** SQLite (`fleet.db` in backend dir); no setup needed.
-- **Prod:** Set `DATABASE_URL` (or `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN`) to a Turso libSQL or Neon Postgres URL.
+- **Prod:** SQLite on the VPS's local disk — the same engine, deliberately. See the
+  Database note under "Security & Runtime Hardening" for why, and §8.8 for the measured
+  trigger that would change it. `DATABASE_URL=postgres://…` switches to Postgres when
+  that day comes.
 - **Money:** Always stored as INTEGER cents. Never store floats.
 - **Dates:** Always ISO-8601 text (`YYYY-MM-DDTHH:MM:SS` or `YYYY-MM-DD`).
 - **Schema file:** `backend/core/schema.sql` — 11 tables, all `CREATE IF NOT EXISTS`.
@@ -213,9 +204,12 @@ There are already 108 independent `get_engine().connect()` sites (§8.2 M3). Do 
 more. Every one contends for the SQLite write lock while pinning a threadpool slot, and
 each becomes a network round-trip after a Postgres migration.
 
-**5. Never re-enable `CORS_ALLOW_LAN` on a public host.**
-It admits any RFC-1918 origin with `allow_credentials=True`. It exists for the desktop
-launcher's LAN mode and nowhere else.
+**5. CORS is exact-match only. Never add an origin regex.**
+`CORS_ALLOW_LAN` and `settings.cors_origin_regex` were deleted with the launcher. With
+`allow_credentials=True` a pattern hands the session cookie to every host it spans, and
+the same list backs the server's own CSRF Origin check (`middleware._origin_allowed`),
+where there is no browser enforcing anything on top. If a new origin needs access, add
+that exact origin to `CORS_ORIGINS`.
 
 **6. Uploads are always bounded.**
 Any new endpoint reading a request body needs a size cap. `await file.read()` with no
@@ -243,12 +237,24 @@ A number invented before measuring is a guess wearing a config file as a disguis
 ### Database
 
 **SQLite stays for now.** This app is chatty (see rule 4), and those round-trips are
-nearly free against a local file but costly against a network database — the managed
-Turso/Neon path in `DEPLOY.md` would make it *slower*. Postgres is already just
-`DATABASE_URL=postgres://…`: the dual-dialect layer in `core/db.py` is complete, with
-only `strftime`/`datetime('now')` needing the `_PG_SHIMS`. Migrate on the measured
-trigger in §8.8 (`SQLITE_BUSY` / lock-wait events), not on a hunch — SQLite's ceiling
-is its single *writer*, so slow reads are evidence for query work, not for migrating.
+nearly free against a local file but costly against a network database — a *managed*
+Postgres would make it **slower**. Postgres is already just `DATABASE_URL=postgres://…`:
+the dual-dialect layer in `core/db.py` is complete, with only `strftime`/`datetime('now')`
+needing the `_PG_SHIMS`. Migrate on the measured trigger in §8.8, now a concrete number
+(**>10 `db.sqlite_busy` events/hour sustained across a working day**), not on a hunch —
+SQLite's ceiling is its single *writer*, so slow reads are evidence for query work, not
+for migrating. When the time comes, put Postgres on the **same box**; the latency
+objection only applies to a remote one.
+
+**The Postgres path is rehearsed, not theoretical.** It was run end to end against a
+real Postgres 16 — schema, all migrations, both shims, a 962-row restore, and
+byte-identical finance figures on both engines (DOCUMENTATION.md §8.8). Four defects
+were found and fixed doing it, all invisible on SQLite: backup-restore desyncing every
+sequence, the `strftime` shim silently returning unformatted input, a `DROP TABLE`
+missing `CASCADE`, and TLS forced even on loopback (which made a same-box Postgres
+unreachable). **Keep that property**: anything new that assumes SQLite — a rate-limiter
+table, a `PRAGMA`, a new `strftime` format without a matching `WHEN` in `_PG_SHIMS` —
+breaks it again.
 
 ---
 
@@ -380,6 +386,7 @@ Two specificity gotchas that layer already solves:
 
 ## Recent Updates (this session)
 
+
 - **Display currency (EUR / Albanian Lek) now works app-wide.** The setting was
   display-only and half-wired; four defects fixed, and Lek now shows on every
   money surface instead of just Fleet/Customers/invoices.
@@ -462,27 +469,34 @@ Two specificity gotchas that layer already solves:
   `#3F3F46` (~1.3:1 on the dark surface); light mode keeps that literal value and
   `dark:text-muted` layers on top (6.06:1).
 
-- **New — run on this PC or over the local wifi (`launcher/launcher.py`):** `start.bat`
-  no longer opens two `cmd` windows and `index.html` over `file://`. It boots a stdlib
-  control server on `127.0.0.1:8800` that serves the launcher page and supervises both
-  servers. Two buttons pick the bind: **This PC only** (`127.0.0.1`, `next dev`) or
-  **Local WiFi network** (`0.0.0.0`, production build, `CORS_ALLOW_LAN=1`), the latter
-  showing the `http://<lan-ip>:3000` address + QR for staff devices. The page keeps
-  working over `file://`, degrading to the old read-only ping view.
-  - **`lib/api.ts` resolves the API host at runtime.** `NEXT_PUBLIC_API_BASE` is inlined
-    at *build* time, so a baked-in loopback made LAN mode impossible. Now a loopback (or
-    unset) value means "follow `window.location.hostname`", while an explicit *remote*
-    base is still used verbatim — production is untouched, and one build serves every
-    IP the machine ever has. `API_BASE` was replaced by `apiBase()`; the only two call
-    sites are the `fetch` in `api.ts` and the logo/stamp `<img>` in `settings/page.tsx`.
-  - **`CORS_ALLOW_LAN`** (new, default **off**) adds `settings.cors_origin_regex` —
-    loopback on any port plus the three RFC-1918 ranges — because `allow_credentials=True`
-    forbids a `*` wildcard. The launcher also passes `CORS_ORIGINS` with the machine's own
-    NetBIOS name, which the regex can't express and which staff can reach the box by.
-  - Windows details that matter: stop uses `taskkill /T` (npm spawns a surviving `node`
-    child), LAN IP comes from a default-route UDP socket (a WSL/Hyper-V box has several
-    IPv4s and `getaddrinfo` order is meaningless), and starting refuses outright when a
-    port is already held by a foreign process instead of "succeeding" against it.
+- **Removed — the desktop launcher and every LAN-hosting code path.** Deleted:
+  `launcher/` (launcher.py, allow-firewall.bat), `start.bat`, `stop.bat`, the repo-root
+  `index.html`, `render.yaml` (a contradictory split Vercel/Render blueprint that set
+  `COOKIE_SAMESITE=none`) and the superseded `backend/api/.env.example`. The deployment
+  target is the single VPS described under "Deployment Targets"; nothing clicks a button
+  to start the app there, and systemd owns the processes.
+  - **`CORS_ALLOW_LAN` and `settings.cors_origin_regex` no longer exist.** The regex
+    admitted every RFC-1918 address with `allow_credentials=True`. Gone with it: the boot
+    guard in `main.py`, the `allow_origin_regex=` argument on `CORSMiddleware`, and the
+    regex branch in `middleware._origin_allowed` — the CSRF Origin check is now exact
+    match against `cors_origin_list` + `app_base_url` and nothing else.
+  - **`apiBase()` lost its loopback-follow branch.** It existed so one build could serve
+    both `localhost` and a DHCP-assigned LAN IP by reading `window.location.hostname`.
+    Three cases remain: `"same-origin"` → `""` (a relative fetch, which is production),
+    an explicit remote base used verbatim, and the loopback dev default.
+  - **`NEXT_DIST_DIR` is gone** from `next.config.mjs` — only the launcher ever set it.
+  - **Four Postgres defects fixed, and the migration rehearsed** against a real
+    Postgres 16: backup-restore desynced every sequence (new
+    `admin_ops._resync_sequences()`), the `strftime` shim silently returned unformatted
+    input, `_migrate_users()` dropped without `CASCADE`, and TLS was forced even on
+    loopback — which made the recommended same-box Postgres unreachable
+    (`get_engine()` now decides via `_is_local_pg_host()`). A 962-row restore and
+    byte-identical finance figures on both engines; DOCUMENTATION.md §8.8 has the
+    detail and the now-concrete `db.sqlite_busy` threshold. **SQLite still ships.**
+  - **Docs corrected where they had drifted from the code**: README still described
+    `start.bat`, `admin`/`admin`, Turso and Vercel; DOCUMENTATION.md §8's status header
+    still read "Phases 0–3 shipped, 4–6 outstanding" while every item beneath it was
+    already tagged `[x]`.
 - **New — one date control everywhere:** `frontend/lib/dates.ts` (ISO-day model:
   `buildMonth()` 6×7 grid, `addDaysISO`, `daysBetweenISO`, localized labels) +
   `frontend/components/DateField.tsx`, a themed portal-rendered calendar popover.

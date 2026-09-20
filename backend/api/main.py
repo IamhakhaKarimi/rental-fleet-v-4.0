@@ -45,7 +45,7 @@ def _verify_production_config() -> None:
     boot, not a warning in a log nobody reads. See DOCUMENTATION.md §8.2 C1.
     """
     if not settings.cookie_secure:
-        return  # dev / LAN launcher — the default secret is fine here
+        return  # local development — the default secret is fine here
     secret = (settings.jwt_secret or "").strip()
     if secret == _DEFAULT_JWT_SECRET or len(secret) < 32:
         raise RuntimeError(
@@ -54,12 +54,6 @@ def _verify_production_config() -> None:
             "client can forge a super_admin session token. Set JWT_SECRET to a "
             "long random value (e.g. `python -c \"import secrets;"
             "print(secrets.token_urlsafe(48))\"`)."
-        )
-    if settings.cors_allow_lan:
-        raise RuntimeError(
-            "CORS_ALLOW_LAN=1 with COOKIE_SECURE=true. LAN mode admits any "
-            "RFC-1918 origin with credentials and must never be enabled on a "
-            "public host. See DOCUMENTATION.md §8.2 M8."
         )
 
 
@@ -131,9 +125,9 @@ app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
+    # Exact match only — no allow_origin_regex. With allow_credentials=True a
+    # pattern would hand the auth cookie to every host the pattern spans.
     allow_origins=settings.cors_origin_list,
-    # None unless CORS_ALLOW_LAN is set — see settings.cors_origin_regex.
-    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,        # required for the HttpOnly auth cookie
     allow_methods=["*"],
     allow_headers=["*"],

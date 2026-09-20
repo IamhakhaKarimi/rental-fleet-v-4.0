@@ -30,7 +30,6 @@ write contention to the resource already under pressure. That makes its counters
 """
 from __future__ import annotations
 
-import re
 import time
 import uuid
 from threading import Lock
@@ -265,11 +264,17 @@ def _allowed_origins() -> list[str]:
 
 def _origin_allowed(value: str) -> bool:
     """Compare a request's Origin (or Referer, reduced to its origin) against the
-    same allow-list CORS uses — exact matches plus the LAN regex when enabled.
+    same exact-match allow-list CORS uses.
+
     Ships together with the HttpOnly cookie migration: alone, the cookie move
     trades an XSS hole for a CSRF hole, since a forged cross-site page can no
     longer read the token but can still ride the ambient cookie unless the
-    request's declared origin is checked server-side."""
+    request's declared origin is checked server-side.
+
+    Exact match only, deliberately. A pattern here would be strictly worse than
+    one in CORS: the browser enforces CORS, but this check is the *server's* own
+    last line against a forged write, so anything it admits is admitted for real.
+    """
     try:
         parts = urlsplit(value)
     except Exception:
@@ -277,12 +282,7 @@ def _origin_allowed(value: str) -> bool:
     if not parts.scheme or not parts.netloc:
         return False
     origin = f"{parts.scheme}://{parts.netloc}"
-    if origin in _allowed_origins():
-        return True
-    pattern = settings.cors_origin_regex
-    if pattern and re.match(pattern, origin):
-        return True
-    return False
+    return origin in _allowed_origins()
 
 
 class CSRFOriginMiddleware:
@@ -413,9 +413,10 @@ class SecurityHeadersMiddleware:
                 add(b"cross-origin-opener-policy", b"same-origin")
                 # Legacy XSS auditor is itself exploitable; modern browsers use CSP.
                 add(b"x-xss-protection", b"0")
-                # Only advertise HSTS when actually on HTTPS — sending it over
-                # plain HTTP on a LAN would pin staff browsers to a scheme the
-                # launcher does not serve.
+                # Only advertise HSTS when actually on HTTPS. `cookie_secure` is
+                # the production/TLS signal; sending HSTS from a plain-HTTP dev
+                # server would pin the developer's browser to a scheme it does
+                # not serve, for a year.
                 if settings.cookie_secure:
                     add(b"strict-transport-security",
                         b"max-age=31536000; includeSubDomains")

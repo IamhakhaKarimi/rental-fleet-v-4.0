@@ -31,3 +31,13 @@ def list_recent(limit: int = 100) -> list[dict]:
              FROM audit_log ORDER BY id DESC LIMIT :lim"""
     with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql), {"lim": limit}).mappings().all()]
+
+
+def list_recent_by_entity(entity: str, limit: int = 100) -> list[dict]:
+    """Like ``list_recent`` but scoped to one entity *before* the LIMIT is applied,
+    so a busy audit log can't push older rows of a low-traffic entity (e.g. license
+    events) out of the window."""
+    sql = """SELECT id, username, action, entity, entity_id, detail, ts
+             FROM audit_log WHERE entity=:e ORDER BY id DESC LIMIT :lim"""
+    with db_read() as conn:
+        return [dict(r) for r in conn.execute(text(sql), {"e": entity, "lim": limit}).mappings().all()]

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 from datetime import date, datetime
 
@@ -40,10 +41,14 @@ log = logging.getLogger(__name__)
 
 LICENSED_YEAR_KEY = "licensed_until_year"
 SEALED_AT_KEY = "licensed_until_year_sealed_at"
+GRACE_DAYS_KEY = "license_grace_days"
+REDEEMED_YEARS_KEY = "license_redeemed_years"
 
 #: Settings keys that carry license state. Never exported or imported — see
-#: ``data/repositories/admin_ops.py``.
-PROTECTED_SETTING_KEYS = frozenset({LICENSED_YEAR_KEY, SEALED_AT_KEY})
+#: ``data/repositories/admin_ops.py``. Grace days is a plain preference (like
+#: theme), not a security-bearing value, so it is intentionally left out —
+#: it travels with a normal settings backup.
+PROTECTED_SETTING_KEYS = frozenset({LICENSED_YEAR_KEY, SEALED_AT_KEY, REDEEMED_YEARS_KEY})
 
 # Sanity bounds for any year this module will accept from anywhere.
 MIN_LICENSE_YEAR = 2020
@@ -187,6 +192,71 @@ def verify_license_key(raw: str) -> int | None:
         return None
     # Constant-time compare of the whole key, separators ignored.
     return year if hmac.compare_digest(license_key(year).replace("-", ""), cleaned.replace("-", "")) else None
+
+
+# ── One-time redemption ───────────────────────────────────────────────────────
+# A key is deterministic (same key every time for a given year), so "one-time
+# use" has to be tracked explicitly rather than falling out of the key itself.
+# Once a year has been activated — by redeeming its key, or by a super-admin's
+# direct "Unlock year" override — that year is marked spent and its key can
+# never be redeemed again, even though the key string itself still verifies.
+def redeemed_years() -> set[int]:
+    raw = cfg.get_setting(REDEEMED_YEARS_KEY, "")
+    try:
+        data = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        data = []
+    return {y for y in (_valid_year(v) for v in data) if y is not None}
+
+
+def is_key_redeemed(year: int) -> bool:
+    return int(year) in redeemed_years()
+
+
+def mark_key_redeemed(year: int) -> None:
+    years = redeemed_years()
+    years.add(int(year))
+    cfg.set_setting(REDEEMED_YEARS_KEY, json.dumps(sorted(years)))
+
+
+# ── Installation fingerprint ──────────────────────────────────────────────────
+def installation_id() -> str:
+    """A stable, non-reversible identifier for this installation.
+
+    Derived from JWT_SECRET the same way license keys are, so it never needs
+    its own storage and is identical across restarts — but the secret itself
+    is never exposed. Display-only (support/audit reference), not used by any
+    access check.
+    """
+    s = _digest("BCR-INSTALL-ID")[:16]
+    return f"INST-{s[0:4]}-{s[4:8]}-{s[8:12]}-{s[12:16]}"
+
+
+# ── Grace period (informational only — see module docstring: this install
+# never fully locks out, `licensed_year()` always floors at the current year) ──
+DEFAULT_GRACE_DAYS = 15
+MIN_GRACE_DAYS = 0
+MAX_GRACE_DAYS = 90
+
+
+def grace_days() -> int:
+    raw = cfg.get_setting(GRACE_DAYS_KEY, "")
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_GRACE_DAYS
+    return v if MIN_GRACE_DAYS <= v <= MAX_GRACE_DAYS else DEFAULT_GRACE_DAYS
+
+
+def set_grace_days(days: int) -> int:
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        raise ValueError("grace_days_out_of_range")
+    if not (MIN_GRACE_DAYS <= d <= MAX_GRACE_DAYS):
+        raise ValueError("grace_days_out_of_range")
+    cfg.set_setting(GRACE_DAYS_KEY, str(d))
+    return d
 
 
 # ── The cap, and the guard every write goes through ──────────────────────────

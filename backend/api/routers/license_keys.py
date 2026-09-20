@@ -52,6 +52,11 @@ def redeem(body: RedeemIn, user: dict = Depends(require_level(2))) -> dict:  # a
     year = licensing_service.verify_license_key(body.key)
     if year is None:
         raise HTTPException(400, detail="invalid_key")
+    if licensing_service.is_key_redeemed(year):
+        raise HTTPException(400, detail="key_already_used")
+    if year <= licensing_service.licensed_year():
+        raise HTTPException(400, detail="key_already_covered")
     licensed = licensing_service.extend_licensed_year(year)
+    licensing_service.mark_key_redeemed(year)
     audit_service.record(user, "redeem_license", "license", str(year))
     return {"ok": True, "year": year, "licensed_year": licensed}

@@ -38,6 +38,7 @@ BACKUP_TABLES = [
 PROTECTED_SETTINGS = (
     "licensed_until_year",
     "licensed_until_year_sealed_at",
+    "license_redeemed_years",
 )
 
 
@@ -76,11 +77,15 @@ def import_all(data: dict) -> dict:
     counts: dict = {}
     with eng.begin() as conn:
         # Snapshot this installation's license rows before anything is touched.
+        # Built dynamically over the whole tuple so adding a new protected key
+        # here can never again silently fall out of this snapshot.
+        keep_params = {f"k{i}": k for i, k in enumerate(PROTECTED_SETTINGS)}
+        keep_placeholders = ", ".join(f":{p}" for p in keep_params)
         keep = [
             dict(r)
             for r in conn.execute(
-                text("SELECT * FROM app_settings WHERE key IN (:k0, :k1)"),
-                {"k0": PROTECTED_SETTINGS[0], "k1": PROTECTED_SETTINGS[1]},
+                text(f"SELECT * FROM app_settings WHERE key IN ({keep_placeholders})"),
+                keep_params,
             ).mappings().all()
         ]
         # Wipe existing rows child-first (reverse dependency order) for FK safety.

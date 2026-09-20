@@ -28,6 +28,18 @@ const config: Config = {
         warn: "var(--warn)",
         danger: "var(--danger)",
         archived: "var(--archived)",
+        // True-alert orange for return/renewal urgency — see --cal-warn.
+        "cal-warn": "var(--cal-warn)",
+        "cal-warn-ink": "var(--cal-warn-ink)",
+        // Licence panel semantics — see the --lic-* block in globals.css.
+        "lic-ok": "var(--lic-ok)",
+        "lic-ok-ink": "var(--lic-ok-ink)",
+        "lic-ok-bg": "var(--lic-ok-bg)",
+        "lic-off": "var(--lic-off)",
+        "lic-off-ink": "var(--lic-off-ink)",
+        "lic-off-bg": "var(--lic-off-bg)",
+        "lic-info-bg": "var(--lic-info-bg)",
+        "lic-info-ink": "var(--lic-info-ink)",
       },
       fontFamily: {
         sans: ["var(--font-body)", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],

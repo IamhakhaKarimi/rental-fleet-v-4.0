@@ -11,6 +11,9 @@
 !*.example
 # Local dev server logs.
 *.log
+
+# Generated report/export output.
+output/
 # DB recovery / secrets staging (original project convention).
 _db_recovery/
 .streamlit/secrets.toml

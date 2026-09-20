@@ -62,6 +62,7 @@ class BookingIn(WindowIn):
     client_name: str
     phone: str = ""
     id_passport: str = ""
+    country: str = ""
     daily_rate_euros: float = 0
     deposit_euros: float = 0
     invoice_lang: str = "tr"
@@ -147,6 +148,7 @@ def create(body: BookingIn, user: dict = Depends(require("create_reservation")))
         client_name=body.client_name.strip().upper(),
         phone=body.phone.strip().upper(),
         id_passport=body.id_passport.strip().upper(),
+        country=body.country.strip(),
         start_dt=start_dt, end_dt=end_dt, days=billed_days,
         daily_rate_cents=_cents(body.daily_rate_euros),
         deposit_cents=_cents(body.deposit_euros),

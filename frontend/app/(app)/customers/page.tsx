@@ -29,6 +29,7 @@ interface CustomerRow {
   full_name: string;
   phone: string;
   id_passport: string;
+  country?: string;
   rental_count: number;
   active_count: number;
   last_rental_date: string | null;

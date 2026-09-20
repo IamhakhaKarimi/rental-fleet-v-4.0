@@ -310,15 +310,62 @@ def reset_theme(user: dict = Depends(require("edit_business_settings"))) -> dict
 
 
 # ── License ──────────────────────────────────────────────────────────────────
+class GraceDaysIn(BaseModel):
+    days: int
+
+
 @router.get("/license/status")
 def license_status(user: dict = Depends(require("edit_business_settings"))) -> dict:
     cy = licensing_service.current_year()
+    rows = lic_repo.list_licenses()
+    latest = rows[0] if rows else None
+    licensed_year = licensing_service.licensed_year()
+
+    # issued_at / activated_at are read straight off the audit trail rather than
+    # stored redundantly: "issued" = the most recent key generated for this
+    # year, "activated" = the most recent redeem/direct-unlock for it.
+    year_str = str(licensed_year)
+    audit_rows = audit_service.recent_by_entity("license", 500)
+    issued_at = next(
+        (r["ts"] for r in audit_rows
+         if r["entity_id"] == year_str and r["action"] == "generate_license_key"),
+        None,
+    )
+    activated_at = next(
+        (r["ts"] for r in audit_rows
+         if r["entity_id"] == year_str and r["action"] in ("redeem_license", "set_licensed_year")),
+        None,
+    )
+
     return {
-        "licensed_year": licensing_service.licensed_year(),
+        "licensed_year": licensed_year,
         "current_year": cy,
         "max_date": licensing_service.max_date().isoformat(),
         "year_options": list(range(cy, cy + 11)),
+        "days_left": licensing_service.days_until_deadline(),
+        "renewal_due": licensing_service.renewal_due(),
+        "grace_days": licensing_service.grace_days(),
+        "installation_id": licensing_service.installation_id(),
+        "license_key": licensing_service.license_key(licensed_year),
+        "redeemed_years": sorted(licensing_service.redeemed_years()),
+        "issued_at": issued_at,
+        "activated_at": activated_at,
+        # Purely descriptive — the most recent ledger entry, if any. Never a
+        # separate stored "installation" record; the ledger row IS the record.
+        "latest_license": latest,
     }
+
+
+@router.get("/license/activity")
+def license_activity(limit: int = 500,
+                     user: dict = Depends(require("edit_business_settings"))) -> list[dict]:
+    """Recent license-related audit rows — the Licence Activity card's feed.
+
+    No new storage: every license mutation already calls ``audit_service.record``
+    with ``entity="license"``; this just reads that entity-scoped slice. ``limit``
+    lets the card's "View all" expand past the default handful.
+    """
+    return audit_service.recent_by_entity("license", limit)
 
 
 @router.put("/license/year")
@@ -328,11 +375,26 @@ def set_license_year(body: LicenseYearIn,
     in LOCKED_PERMISSIONS, so the Admin Panel cannot delegate this to an admin —
     an admin unlocks a year only by redeeming a key the super-admin issued."""
     try:
-        licensed = licensing_service.set_licensed_year(int(body.year))
+        year = int(body.year)
+        licensed = licensing_service.set_licensed_year(year)
     except (TypeError, ValueError):
         raise HTTPException(400, detail="fields_required")
+    # A direct override activates the year the same as redeeming its key would —
+    # so that key can't be redeemed again afterward either.
+    licensing_service.mark_key_redeemed(year)
     audit_service.record(user, "set_licensed_year", "license", str(body.year))
     return {"ok": True, "licensed_year": licensed}
+
+
+@router.put("/license/grace-days")
+def set_grace_days(body: GraceDaysIn,
+                   user: dict = Depends(require("edit_business_settings"))) -> dict:
+    try:
+        days = licensing_service.set_grace_days(body.days)
+    except ValueError:
+        raise HTTPException(400, detail="grace_days_out_of_range")
+    audit_service.record(user, "set_grace_days", "license", "", str(days))
+    return {"ok": True, "grace_days": days}
 
 
 @router.get("/licenses")

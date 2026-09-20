@@ -125,6 +125,130 @@ def _txt(value) -> str:
     return "" if value is None else str(value)
 
 
+def build_bulk_reservation_form_pdf(reservations: list[dict], business_name: str,
+                                    logo: str = "", lang: str = "tr") -> bytes:
+    """Build a portrait-A4 register for the agency's active reservations.
+
+    Existing reservations are prefilled and the final page is padded with blank,
+    outlined rows so staff can add bookings by hand.  The intentionally generous
+    row height keeps the sheet useful as a paper form rather than merely a report.
+    """
+    if lang not in LANGUAGES:
+        lang = "tr"
+    T = lambda key: t_lang(key, lang)
+    pdf, F = _new_pdf()
+    pdf.set_auto_page_break(auto=False)
+    rows_per_page = 12
+    page_count = max(1, (max(1, len(reservations)) + rows_per_page - 1) // rows_per_page)
+
+    def short_date(value) -> str:
+        try:
+            return datetime.fromisoformat(str(value).replace(" ", "T")).strftime("%d/%m/%Y")
+        except (TypeError, ValueError):
+            return ""
+
+    def rate(value) -> str:
+        try:
+            return f"{int(value or 0) / 100:,.2f} EUR"
+        except (TypeError, ValueError):
+            return ""
+
+    def fleet_with_plate(row: dict, width: float) -> str:
+        """Keep the license suffix visible even when a long model is shortened."""
+        model = _txt(row.get("make_model")).strip()
+        suffix = _txt(row.get("license_plate")).strip()[-4:]
+        if not suffix:
+            return _fit(pdf, model, width)
+        tail = f" · {suffix}"
+        if pdf.get_string_width(model + tail) <= width - 2:
+            return model + tail
+        while model and pdf.get_string_width(model + "…" + tail) > width - 2:
+            model = model[:-1]
+        return f"{model.rstrip()}…{tail}" if model else suffix
+
+    # 180mm usable width inside the standard 15mm portrait margins.
+    columns = [
+        (T("bulk_start_date"), 25),
+        (T("bulk_end_date"), 25),
+        (T("bulk_fleet"), 37),
+        (T("bulk_client_name"), 42),
+        (T("bulk_country"), 27),
+        (T("bulk_rate_day"), 24),
+    ]
+
+    for page_index in range(page_count):
+        if page_index:
+            pdf.add_page()
+        L, R = 15, 195
+        y = 14
+        logo_stream = _logo_stream(logo)
+        if logo_stream:
+            try:
+                pdf.image(logo_stream, x=L, y=y, w=25, h=12, keep_aspect_ratio=True)
+            except Exception:
+                logo_stream = None
+
+        title_x = L + (30 if logo_stream else 0)
+        pdf.set_xy(title_x, y)
+        pdf.set_font(F, "B", 13)
+        pdf.set_text_color(*_TEXT)
+        pdf.cell(R - title_x, 6, text=_txt(business_name) or APP_NAME)
+        pdf.set_xy(title_x, y + 7)
+        pdf.set_font(F, "B", 18)
+        pdf.cell(R - title_x, 8, text=T("bulk_reservation_form"))
+        pdf.set_xy(title_x, y + 16)
+        pdf.set_font(F, "", 8)
+        pdf.set_text_color(*_MUTED)
+        pdf.cell(R - title_x, 4, text=T("bulk_reservation_form_hint"))
+
+        pdf.set_xy(145, y)
+        pdf.set_font(F, "", 7.5)
+        pdf.cell(50, 4, text=f"{T('bulk_printed').upper()}: {datetime.now().strftime('%d/%m/%Y')}", align="R")
+        pdf.set_xy(145, y + 5)
+        pdf.cell(50, 4, text=f"{T('bulk_page').upper()} {page_index + 1} / {page_count}", align="R")
+
+        y = 40
+        pdf.set_draw_color(70, 66, 60)
+        pdf.set_line_width(0.25)
+        pdf.set_fill_color(*_LIGHT)
+        pdf.set_text_color(*_TEXT)
+        pdf.set_font(F, "B", 7)
+        pdf.set_xy(L, y)
+        for label, width in columns:
+            pdf.cell(width, 13, text=label, border=1, fill=True, align="C")
+        y += 13
+
+        start = page_index * rows_per_page
+        page_rows = reservations[start:start + rows_per_page]
+        page_rows += [{} for _ in range(rows_per_page - len(page_rows))]
+        pdf.set_font(F, "", 8)
+        for row in page_rows:
+            values = [
+                short_date(row.get("start_dt")),
+                short_date(row.get("end_dt")),
+                fleet_with_plate(row, columns[2][1]) if row else "",
+                _txt(row.get("client_name")),
+                _txt(row.get("country")),
+                rate(row.get("daily_rate")) if row else "",
+            ]
+            pdf.set_xy(L, y)
+            for value, (_, width) in zip(values, columns):
+                pdf.cell(width, 17, text=_fit(pdf, value, width), border=1, align="C")
+            y += 17
+
+        pdf.set_xy(L, 268)
+        pdf.set_font(F, "", 7)
+        pdf.set_text_color(*_MUTED)
+        pdf.cell(120, 4, text=f"{T('bulk_agency_notes')}: _________________________________________________")
+        pdf.cell(60, 4, text=f"{T('bulk_signature')}: ____________________", align="R")
+
+    # Keep one completely empty sheet at the end for handwritten reservations.
+    # It intentionally has no header, footer, or borders.
+    pdf.add_page()
+
+    return bytes(pdf.output())
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Rental invoice
 # ──────────────────────────────────────────────────────────────────────────────

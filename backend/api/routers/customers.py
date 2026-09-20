@@ -21,7 +21,7 @@ from services import audit_service
 
 router = APIRouter(prefix="/api", tags=["customers"])
 
-_SEARCH_FIELDS = ("full_name", "phone", "id_passport", "customer_id")
+_SEARCH_FIELDS = ("full_name", "phone", "id_passport", "country", "customer_id")
 
 
 def _matches(c: dict, q: str) -> bool:
@@ -63,6 +63,7 @@ class CustomerIn(BaseModel):
     full_name: str
     phone: str = ""
     id_passport: str = ""
+    country: str | None = None
 
 
 class ReassignIn(BaseModel):
@@ -126,6 +127,7 @@ def update_customer(customer_id: int, body: CustomerIn,
         body.full_name.strip().upper(),
         body.phone.strip().upper(),
         body.id_passport.strip().upper(),
+        body.country.strip() if body.country is not None else None,
     )
     audit_service.record(user, "edit_customer", "customer", str(customer_id),
                          body.full_name)

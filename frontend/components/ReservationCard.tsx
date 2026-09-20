@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -8,8 +8,7 @@ import { Modal } from "./Modal";
 // Editing is the booking dialog prefilled — see BookingDialog's `editRental`.
 // The cycle back here is `import type` only, so it erases at compile time.
 import { BookingDialog } from "./BookingDialog";
-import { StatusBadge } from "./StatusBadge";
-import { SwipeCard, SwipeField, SwipePanel } from "./SwipeCard";
+import { initialsOf } from "./SwipeCard";
 
 export interface ActiveRental {
   deal_id: string;
@@ -27,6 +26,10 @@ export interface ActiveRental {
   daily_rate: number;
   total_amount: number;
   deposit: number;
+  /** Updated by the API whenever the reservation itself changes. */
+  updated_at?: string;
+  /** Fallback for data created before updated_at was introduced. */
+  created_at?: string;
 }
 
 const fmtInvoiceNo = (id: string) =>
@@ -40,6 +43,42 @@ const daysBetweenISO = (a: string, b: string) => {
   const [y2, m2, d2] = b.split("-").map(Number);
   return Math.round((new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime()) / 86400000);
 };
+
+const parseLocalDate = (value: string) => new Date((value || "").replace(" ", "T"));
+
+export type ReservationUrgency = "upcoming" | "active" | "due" | "overdue" | "closed";
+
+/** Human-friendly state and exact-time progress shared by every reservation card. */
+export function getReservationUrgency(
+  rental: Pick<ActiveRental, "status" | "start_dt" | "end_dt">,
+  now = new Date()
+): { kind: ReservationUrgency; days: number; progress: number } {
+  const start = parseLocalDate(rental.start_dt);
+  const end = parseLocalDate(rental.end_dt);
+  const validRange = !isNaN(start.getTime()) && !isNaN(end.getTime()) && end > start;
+
+  if (rental.status.toLowerCase() !== "active") {
+    return { kind: "closed", days: 0, progress: 100 };
+  }
+
+  const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate()
+  ).padStart(2, "0")}`;
+  const startDays = daysBetweenISO(todayISO, rental.start_dt.slice(0, 10));
+  const endDays = daysBetweenISO(todayISO, rental.end_dt.slice(0, 10));
+  const progress = validRange
+    ? Math.max(0, Math.min(100, ((now.getTime() - start.getTime()) / (end.getTime() - start.getTime())) * 100))
+    : 0;
+
+  if (validRange && now < start) return { kind: "upcoming", days: Math.max(0, startDays), progress: 0 };
+  // A return remains "due today" for the whole calendar day; it becomes
+  // overdue on the following day, which matches how operators bill day spans.
+  if (endDays < 0) {
+    return { kind: "overdue", days: Math.max(1, Math.abs(endDays)), progress: 100 };
+  }
+  if (endDays === 0) return { kind: "due", days: 0, progress };
+  return { kind: "active", days: Math.max(0, endDays), progress };
+}
 
 function Stepper({ value, set, step = 5 }: { value: number; set: (n: number) => void; step?: number }) {
   return (
@@ -152,9 +191,23 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
   const r = rental;
 
   const fmtFull = (s: string) => {
-    const d = new Date(s.replace(" ", "T"));
+    const d = parseLocalDate(s);
+    if (isNaN(d.getTime())) return "—";
     const day = new Intl.DateTimeFormat(lang || "en", { day: "numeric", month: "long", year: "numeric" }).format(d);
     return `${day} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const fmtUpdated = (s?: string) => {
+    if (!s) return "—";
+    const d = parseLocalDate(s);
+    if (isNaN(d.getTime())) return "—";
+    return new Intl.DateTimeFormat(lang || "en", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
   };
 
   const [editOpen, setEditOpen] = useState(false);
@@ -218,97 +271,145 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
     }
   }
 
-  // Days left until the return date (date-only, timezone-safe). Drives the header
-  // chip: "Nd" upcoming, "today" on the due day, "overdue" past it.
-  const now = new Date();
-  const todayISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
-    now.getDate()
-  ).padStart(2, "0")}`;
-  const daysLeft = daysBetweenISO(todayISO, r.end_dt.slice(0, 10));
-  const daysChip =
-    daysLeft > 0
-      ? `${daysLeft}${tf("days_left_short", "d")}`
-      : daysLeft === 0
-      ? tf("due_today_short", "today")
-      : tf("overdue_short", "overdue");
+  const urgency = getReservationUrgency(r);
+  const urgencyText: Record<ReservationUrgency, { label: string; detail: string }> = {
+    upcoming: {
+      label: tf("status_upcoming", "Upcoming"),
+      detail:
+        urgency.days === 0
+          ? tf("starts_today", "Starts today")
+          : `${tf("starts_in", "Starts in")} ${urgency.days} ${urgency.days === 1 ? tf("day", "day") : tf("days", "days")}`,
+    },
+    active: {
+      label: tf("active", "Active"),
+      detail: `${urgency.days} ${urgency.days === 1 ? tf("day_left", "day left") : tf("days_left", "days left")}`,
+    },
+    due: { label: tf("active", "Active"), detail: tf("due_today", "Due today") },
+    overdue: {
+      label: tf("overdue", "Overdue"),
+      detail: `${urgency.days} ${urgency.days === 1 ? tf("day_overdue", "day overdue") : tf("days_overdue", "days overdue")}`,
+    },
+    closed: { label: tf("status_closed", "Closed"), detail: tf("rental_complete", "Rental complete") },
+  };
+  const currentUrgency = urgencyText[urgency.kind];
+  const cardTitleId = `reservation-${r.deal_id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
   return (
-    <SwipeCard
-      name={r.client_name}
-      reference={fmtInvoiceNo(r.deal_id)}
-      chip={daysChip}
-      chipTitle={tf("days_left", "Days left")}
-    >
-      {/* Info grid — labelled two-column body */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <SwipeField label={tf("contact", "Contact")}>
-          <div className="swipe-val-mono">{r.phone || "—"}</div>
-          <div className="swipe-val-mono mt-1">{r.id_passport || "—"}</div>
-        </SwipeField>
-        <SwipeField label={tf("invoice_vehicle", "Vehicle")}>
-          <div className="swipe-val truncate">
-            {r.make_model} · {r.color || "—"}
-          </div>
-          <div className="swipe-val-mono mt-1">{r.license_plate || "—"}</div>
-        </SwipeField>
-      </div>
+    <article className="reservation-card" aria-labelledby={cardTitleId} aria-busy={busy || undefined}>
+      <header className="reservation-card__header">
+        <div className="reservation-card__avatar" aria-hidden="true">{initialsOf(r.client_name)}</div>
+        <div className="min-w-0 flex-1">
+          <h3 id={cardTitleId} className="reservation-card__name">{r.client_name || "—"}</h3>
+          <div className="reservation-card__reference">{fmtInvoiceNo(r.deal_id)}</div>
+        </div>
+        <div className={`reservation-status reservation-status--${urgency.kind}`} aria-label={`${currentUrgency.label}: ${currentUrgency.detail}`}>
+          <span className="reservation-status__dot" aria-hidden="true" />
+          <span>{currentUrgency.label}</span>
+          <span className="reservation-status__separator" aria-hidden="true">·</span>
+          <span className="reservation-status__detail">{currentUrgency.detail}</span>
+        </div>
+      </header>
 
-      <div className="mt-3">
-        <SwipePanel>
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[12px] font-semibold text-ink">
-              {fmtFull(r.start_dt)} → {fmtFull(r.end_dt)}
+      <div className="reservation-card__body">
+        <div className="reservation-info-grid">
+          <section className="reservation-info" aria-label={tf("contact", "Contact")}>
+            <div className="reservation-detail-row">
+              <span className="reservation-icon" aria-hidden="true"><span className="msr">call</span></span>
+              <div className="reservation-detail-value reservation-detail-value--mono">{r.phone || "—"}</div>
             </div>
-            <StatusBadge status={r.status} />
+            <div className="reservation-detail-row">
+              <span className="reservation-icon" aria-hidden="true"><span className="msr">badge</span></span>
+              <div className="reservation-detail-value reservation-detail-value--mono">{r.id_passport || "—"}</div>
+            </div>
+          </section>
+
+          <section className="reservation-info reservation-info--vehicle" aria-label={tf("invoice_vehicle", "Vehicle")}>
+            <div className="reservation-detail-row">
+              <span className="reservation-icon reservation-icon--vehicle" aria-hidden="true"><span className="msr">directions_car</span></span>
+              <div className="reservation-vehicle-name">{r.make_model || "—"}{r.color ? ` · ${r.color}` : ""}</div>
+            </div>
+            <div className="reservation-detail-row">
+              <span className="reservation-icon" aria-hidden="true"><span className="msr">pin</span></span>
+              <span className="reservation-plate">{r.license_plate || "—"}</span>
+            </div>
+          </section>
+        </div>
+
+        <section className="reservation-period" aria-label={tf("period", "Rental period")}>
+          <div className="reservation-period__topline">
+            <div className="reservation-period__icon" aria-hidden="true"><span className="msr">calendar_month</span></div>
+            <div className="reservation-period__dates">
+              <div className="min-w-0">
+                <div className="reservation-detail-label">{tf("pickup", "Pickup")}</div>
+                <time dateTime={r.start_dt}>{fmtFull(r.start_dt)}</time>
+              </div>
+              <span className="reservation-period__arrow msr" aria-hidden="true">arrow_forward</span>
+              <div className="min-w-0">
+                <div className="reservation-detail-label">{tf("return", "Return")}</div>
+                <time dateTime={r.end_dt}>{fmtFull(r.end_dt)}</time>
+              </div>
+            </div>
           </div>
-          <div className="text-[11px] text-muted mt-1.5">
-            {fmt(r.daily_rate)}/{tf("day", "day")} · {t("days")}: {r.rental_days} ·{" "}
-            {t("live_total")}: {fmt(r.total_amount)} · {t("deposit")}: {fmt(r.deposit)}
+          <div
+            className="reservation-progress"
+            role="progressbar"
+            aria-label={tf("rental_progress", "Rental progress")}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(urgency.progress)}
+          >
+            <span style={{ width: `${urgency.progress}%` }} />
           </div>
-        </SwipePanel>
+          <div className="reservation-period__helper">
+            <span>{r.rental_days} {r.rental_days === 1 ? tf("rental_day", "rental day") : tf("rental_days", "rental days")}</span>
+            <span aria-hidden="true">·</span>
+            <span>{currentUrgency.detail}</span>
+          </div>
+
+          <dl className="reservation-metrics">
+            <div className="reservation-metric reservation-metric--rate">
+              <dt className="sr-only">{tf("daily_rate", "Daily rate")}</dt>
+              <dd><span className="msr" aria-hidden="true">euro</span>{fmt(r.daily_rate)}<span>/{tf("per_day", "day")}</span></dd>
+            </div>
+            <div className="reservation-metric reservation-metric--days">
+              <dt className="sr-only">{tf("days", "Days")}</dt>
+              <dd><span className="msr" aria-hidden="true">calendar_month</span><span className="reservation-metric__days">{r.rental_days} {tf("days_short", "Days")}</span></dd>
+            </div>
+            <div className="reservation-metric reservation-metric--total reservation-metric--amount">
+              <dt className="sr-only">{tf("live_total", "Total")}</dt>
+              <dd><span className="msr" aria-hidden="true">account_balance_wallet</span>{fmt(r.total_amount)}</dd>
+            </div>
+            <div className="reservation-metric reservation-metric--deposit reservation-metric--amount">
+              <dt className="sr-only">{tf("deposit", "Deposit")}</dt>
+              <dd><span className="msr" aria-hidden="true">verified_user</span>{fmt(r.deposit)}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <div className="reservation-actions" aria-label={tf("col_actions", "Reservation actions")}>
+          <button type="button" className="reservation-action" onClick={() => setEditOpen(true)} title={tf("edit_reservation_hint", "Change dates, rate or the assigned car")}>
+            <span className="reservation-action__icon" aria-hidden="true"><span className="msr">edit_square</span></span>
+            {t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}
+          </button>
+          <button type="button" className="reservation-action" onClick={() => setManageOpen(true)} title={tf("manage_rental", "Manage / Return")}>
+            <span className="reservation-action__icon" aria-hidden="true"><span className="msr">build</span></span>
+            {tf("manage_rental", "Manage / Return")}
+          </button>
+          <button type="button" className="reservation-action" onClick={openLangPicker} title={tf("print_invoice_hint", "Open a printable invoice for this rental")}>
+            <span className="reservation-action__icon reservation-action__icon--invoice" aria-hidden="true"><span className="msr">receipt_long</span></span>
+            {tf("print_invoice", "Print Invoice")}
+          </button>
+          <button type="button" className="reservation-action reservation-action--danger" onClick={cancelReservation} disabled={busy} title={tf("cancel_hint", "Cancel this reservation and free the car")}>
+            <span className="reservation-action__icon" aria-hidden="true"><span className="msr">cancel</span></span>
+            {busy ? tf("loading", "Working…") : tf("cancel_reservation", "Cancel Reservation")}
+          </button>
+        </div>
       </div>
 
-      {/* Working actions — each opens a focused modal. */}
-      <div className="flex items-center gap-2 mt-3">
-        <button
-          className="btn flex-1"
-          onClick={() => setEditOpen(true)}
-          title={tf("edit_reservation_hint", "Change dates, rate or the assigned car")}
-        >
-          <span className="msr text-[18px]">edit</span>
-          {t("edit_reservation") === "edit_reservation" ? "Edit Reservation" : t("edit_reservation")}
-        </button>
-        <button
-          className="btn flex-1"
-          onClick={() => setManageOpen(true)}
-          title={tf("manage_return_hint", "Record charges and close the rental")}
-        >
-          <span className="msr text-[18px]">build</span>
-          {t("manage_return") === "manage_return" ? "Manage / Return" : t("manage_return")}
-        </button>
-      </div>
-
-      {/* Closing actions — the last things done with a departing client, so they
-          sit at the foot of the card behind a rule. */}
-      <div className="flex items-center gap-2 mt-3 pt-3 border-t border-line">
-        <button
-          className="btn flex-1"
-          onClick={openLangPicker}
-          title={tf("print_invoice_hint", "Open a printable invoice for this rental")}
-        >
-          <span className="msr text-[18px]">receipt_long</span>
-          {tf("print_invoice", "Print Invoice")}
-        </button>
-        <button
-          className="btn btn-danger"
-          onClick={cancelReservation}
-          disabled={busy}
-          title={tf("cancel_hint", "Cancel this reservation and free the car")}
-        >
-          <span className="msr text-[18px]">cancel</span>
-          {tf("cancel_reservation", "Cancel Reservation")}
-        </button>
-      </div>
+      <footer className="reservation-card__footer">
+        <span className="msr" aria-hidden="true">schedule</span>
+        <span>{tf("last_updated", "Last updated")}: {fmtUpdated(r.updated_at || r.created_at)}</span>
+      </footer>
 
       {/* Same dialog as "New Reservation", prefilled — one shape of a rental to
           learn, whether you are creating or changing one. */}
@@ -337,7 +438,7 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
       {manageOpen && (
         <Modal
           title={`${
-            t("manage_return") === "manage_return" ? "Manage / Return" : t("manage_return")
+            tf("manage_rental", "Manage / Return")
           } · ${r.client_name}`}
           onClose={() => setManageOpen(false)}
           wide
@@ -383,6 +484,6 @@ export function ReservationCard({ rental, onChange }: { rental: ActiveRental; on
           </div>
         </Modal>
       )}
-    </SwipeCard>
+    </article>
   );
 }

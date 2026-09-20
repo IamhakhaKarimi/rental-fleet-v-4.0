@@ -20,8 +20,9 @@ def next_deal_id() -> str:
 def list_active_rentals_with_vehicle() -> list[dict]:
     sql = """SELECT r.deal_id, r.vehicle_id, r.start_dt, r.end_dt, r.status,
                     r.rental_days, r.daily_rate, r.total_amount, r.deposit,
+                    r.created_at, COALESCE(NULLIF(r.updated_at, ''), r.created_at) AS updated_at,
                     v.make_model, v.color, v.license_plate,
-                    c.full_name AS client_name, c.phone, c.id_passport
+                    c.full_name AS client_name, c.phone, c.id_passport, c.country
              FROM rentals r
              JOIN vehicles  v ON v.vehicle_id  = r.vehicle_id
              JOIN customers c ON c.customer_id = r.customer_id
@@ -37,6 +38,7 @@ def list_all_rentals_with_vehicle() -> list[dict]:
     coloured by return-state; closed ones render greyed)."""
     sql = """SELECT r.deal_id, r.vehicle_id, r.start_dt, r.end_dt, r.status,
                     r.rental_days, r.daily_rate, r.total_amount, r.deposit,
+                    r.created_at, COALESCE(NULLIF(r.updated_at, ''), r.created_at) AS updated_at,
                     v.make_model, v.color, v.license_plate,
                     c.full_name AS client_name, c.phone, c.id_passport
              FROM rentals r
@@ -103,11 +105,11 @@ def vehicle_has_active_rental(vehicle_id: str) -> bool:
     return row is not None
 
 
-def create_rental(*, vehicle_id, make_model, client_name, phone, id_passport,
+def create_rental(*, vehicle_id, make_model, client_name, phone, id_passport, country="",
                   start_dt, end_dt, days, daily_rate_cents, deposit_cents,
                   created_by="", created_by_name="", created_by_role="",
                   invoice_lang="tr") -> str:
-    customer_id = get_or_create_customer(client_name, phone, id_passport)
+    customer_id = get_or_create_customer(client_name, phone, id_passport, country)
     deal_id = next_deal_id()
     total = daily_rate_cents * int(days)
     with get_engine().begin() as conn:
@@ -142,7 +144,8 @@ def update_creator(deal_id: str, username: str, full_name: str, role: str):
     """Reassign which staff member a rental is recorded as 'registered by'."""
     with get_engine().begin() as conn:
         conn.execute(text("""
-            UPDATE rentals SET created_by=:u, created_by_name=:n, created_by_role=:r
+            UPDATE rentals SET created_by=:u, created_by_name=:n, created_by_role=:r,
+                               updated_at=datetime('now')
             WHERE deal_id=:d
         """), {"u": username or "", "n": full_name or "", "r": role or "", "d": deal_id})
 
@@ -159,7 +162,7 @@ def update_rental_rate(deal_id: str, daily_rate_cents: int) -> int:
             return -1
         total = daily_rate_cents * int(days)
         conn.execute(text(
-            "UPDATE rentals SET daily_rate=:rate, total_amount=:total WHERE deal_id=:d"
+            "UPDATE rentals SET daily_rate=:rate, total_amount=:total, updated_at=datetime('now') WHERE deal_id=:d"
         ), {"rate": daily_rate_cents, "total": total, "d": deal_id})
         # Keep the income ledger consistent: the single 'rental' charge mirrors
         # the rental total (deposits/penalties/damage are separate charge rows).
@@ -212,7 +215,8 @@ def update_rental_dates(deal_id: str, return_date: str = "", start_date: str = "
             return -3
         total = int(row["daily_rate"]) * days
         conn.execute(text(
-            "UPDATE rentals SET start_dt=:s, end_dt=:e, rental_days=:days, total_amount=:total "
+            "UPDATE rentals SET start_dt=:s, end_dt=:e, rental_days=:days, total_amount=:total, "
+            "updated_at=datetime('now') "
             "WHERE deal_id=:d"
         ), {"s": s, "e": e, "days": days, "total": total, "d": deal_id})
         conn.execute(text(
@@ -247,7 +251,7 @@ def change_rental_vehicle(deal_id: str, new_vehicle_id: str) -> bool:
             "s": row["start_dt"], "e": row["end_dt"]}).first()
         if clash:
             return False
-        conn.execute(text("UPDATE rentals SET vehicle_id=:v WHERE deal_id=:d"),
+        conn.execute(text("UPDATE rentals SET vehicle_id=:v, updated_at=datetime('now') WHERE deal_id=:d"),
                      {"v": new_vehicle_id, "d": deal_id})
         conn.execute(text("UPDATE charges SET vehicle_id=:v WHERE deal_id=:d"),
                      {"v": new_vehicle_id, "d": deal_id})
@@ -264,7 +268,7 @@ def cancel_rental(deal_id: str):
     with get_engine().begin() as conn:
         vid = conn.execute(text("SELECT vehicle_id FROM rentals WHERE deal_id=:d"),
                            {"d": deal_id}).scalar()
-        conn.execute(text("UPDATE rentals SET status='Closed' WHERE deal_id=:d"), {"d": deal_id})
+        conn.execute(text("UPDATE rentals SET status='Closed', updated_at=datetime('now') WHERE deal_id=:d"), {"d": deal_id})
         if vid:
             conn.execute(text(
                 "UPDATE vehicles SET status='Available',updated_at=datetime('now') WHERE vehicle_id=:v"
@@ -305,7 +309,7 @@ def reactivate_rental(deal_id: str) -> bool:
             "AND deal_id<>:d LIMIT 1"), {"v": vid, "d": deal_id}).first()
         if clash:
             return False
-        conn.execute(text("UPDATE rentals SET status='Active' WHERE deal_id=:d"), {"d": deal_id})
+        conn.execute(text("UPDATE rentals SET status='Active', updated_at=datetime('now') WHERE deal_id=:d"), {"d": deal_id})
         conn.execute(text(
             "UPDATE vehicles SET status='Rented', updated_at=datetime('now') WHERE vehicle_id=:v"
         ), {"v": vid})
@@ -333,7 +337,8 @@ def settle_and_close(deal_id: str, vehicle_id: str, late_cents: int,
                 "WHERE vehicle_id=:v"
             ), {"a": int(damage_cents), "v": vehicle_id})
         conn.execute(text(
-            "UPDATE rentals SET status='Closed', return_notes=:n, contract_signed=:c "
+            "UPDATE rentals SET status='Closed', return_notes=:n, contract_signed=:c, "
+            "updated_at=datetime('now') "
             "WHERE deal_id=:d"
         ), {"n": return_notes or "", "c": "Yes" if contract_signed else "No", "d": deal_id})
         conn.execute(text(

@@ -27,7 +27,7 @@ from config.settings import LANGUAGES
 from data.repositories import app_settings as app_cfg
 from data.repositories import rentals as rrepo
 from data.repositories import vehicles as vrepo
-from ui.pdf import build_timeline_pdf
+from ui.pdf import build_bulk_reservation_form_pdf, build_timeline_pdf
 
 router = APIRouter(prefix="/api/timeline", tags=["timeline"])
 
@@ -122,4 +122,26 @@ def timeline_pdf(
     return Response(
         content=bytes(pdf), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{fname}.pdf"'},
+    )
+
+
+@router.get("/bulk-reservations.pdf")
+def bulk_reservations_pdf(
+    lang: str = "tr",
+    user: dict = Depends(require("view_management")),
+    _slot: dict = Depends(heavy_slot),
+) -> Response:
+    """Quick-export the current active bookings as a printable A4 register."""
+    pdf = build_bulk_reservation_form_pdf(
+        rrepo.list_active_rentals_with_vehicle(),
+        business_name=app_cfg.get_business_name(),
+        logo=app_cfg.get_logo() or "",
+        lang=lang,
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="bulk-reservation-form.pdf"'
+        },
     )

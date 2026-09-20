@@ -80,13 +80,14 @@ export function SwipePanel({ children }: { children: ReactNode }) {
   return <div className="swipe-panel">{children}</div>;
 }
 
-// Cards per page by breakpoint (matches the design's 3-up desktop stage).
+// Dense desktop views show five cards at once, then step down before cards would
+// become difficult to scan on a narrower workspace.
 function usePerPage() {
   const [pp, setPp] = useState(3);
   useEffect(() => {
     const calc = () => {
       const w = window.innerWidth;
-      setPp(w >= 1024 ? 3 : w >= 640 ? 2 : 1);
+      setPp(w >= 1200 ? 5 : w >= 1024 ? 4 : w >= 768 ? 3 : w >= 560 ? 2 : 1);
     };
     calc();
     window.addEventListener("resize", calc);
@@ -131,6 +132,7 @@ export function SwipeDeck<T>({
   render,
   keyOf,
   empty,
+  deckClassName = "",
   cardClassName = "",
   itemWidth,
   gap = 16,
@@ -140,6 +142,8 @@ export function SwipeDeck<T>({
   render: (item: T) => ReactNode;
   keyOf: (item: T) => string | number;
   empty?: ReactNode;
+  /** Extra class on the complete deck stage, used to constrain page-specific layouts. */
+  deckClassName?: string;
   /** Extra class on each card wrapper (e.g. the dashboard's `card p-3 space-y-2`). */
   cardClassName?: string;
   /** Fixed card width classes (e.g. `w-[260px] sm:w-[280px]`); omit for deck sizing. */
@@ -326,7 +330,7 @@ export function SwipeDeck<T>({
     : { flex: `0 0 calc((100% - ${(perPage - 1) * gap}px) / ${perPage})` };
 
   return (
-    <div className="relative">
+    <div className={`relative ${deckClassName}`}>
       {multi && (
         <button
           className="swipe-nav left hidden sm:grid"

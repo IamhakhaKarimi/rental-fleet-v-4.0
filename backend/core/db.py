@@ -394,7 +394,13 @@ def _migrate_add_columns():
                   # Constant default (not datetime('now')) — SQLite forbids a
                   # non-constant DEFAULT in ADD COLUMN. Empty = never changed.
                   "password_changed_at": "TEXT NOT NULL DEFAULT ''"},
-        "rentals": {"invoice_lang": "TEXT NOT NULL DEFAULT 'tr'"},
+        "rentals": {
+            "invoice_lang": "TEXT NOT NULL DEFAULT 'tr'",
+            # SQLite requires a constant default in ALTER TABLE. Queries fall
+            # back to created_at until the first real reservation update.
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        },
+        "customers": {"country": "TEXT NOT NULL DEFAULT ''"},
         "charges": {"note": "TEXT NOT NULL DEFAULT ''", "deleted_at": "TEXT"},
         "vehicle_costs": {"deleted_at": "TEXT"},
     }

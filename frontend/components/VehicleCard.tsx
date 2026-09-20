@@ -25,7 +25,13 @@ export const VehicleCard = memo(function VehicleCard({
   footer?: ReactNode;
 }) {
   return (
-    <div className="swipe-card h-full flex flex-col">
+    <div
+      className="swipe-card h-full flex flex-col"
+      style={{
+        background: "transparent",
+        boxShadow: "inset 0 0 0 1px color-mix(in oklab, var(--border) 82%, var(--record-blue) 18%)",
+      }}
+    >
       <div className="veh-card-photo">{photo}</div>
       <div className="swipe-body flex-1 flex flex-col">
         <div className="veh-card-name">{name}</div>

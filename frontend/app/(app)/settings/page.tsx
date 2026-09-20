@@ -7,7 +7,7 @@ import { useToast } from "@/lib/toast";
 import { can, roleLevel } from "@/lib/perms";
 import { useCurrency, useMoney, DEFAULT_EUR_ALL_RATE } from "@/lib/currency";
 import { useTheme } from "@/lib/theme";
-import { licenseCapNote, refreshLicenseLimits } from "@/lib/license";
+import { refreshLicenseLimits } from "@/lib/license";
 import { Modal } from "@/components/Modal";
 import { DateField } from "@/components/DateField";
 import { AdminPanel } from "@/components/AdminPanel";
@@ -1190,6 +1190,586 @@ const blankLicense = {
   notes: "",
 };
 
+interface LicenseActivityRow {
+  id: number;
+  username: string;
+  action: string;
+  entity: string;
+  entity_id: string;
+  detail: string;
+  ts: string;
+}
+
+// Feature areas this app actually has — every licence covers all of them
+// today (no per-plan gating exists), so the checklist is informational.
+// Icons reuse the same Material Symbols the sidebar already uses per section.
+const LICENSE_FEATURES = [
+  { code: "fleet", icon: "directions_car" },
+  { code: "reservations", icon: "event" },
+  { code: "customers", icon: "group" },
+  { code: "finance", icon: "payments" },
+  { code: "reports", icon: "bar_chart" },
+  { code: "invoices", icon: "receipt_long" },
+] as const;
+
+type LicenseState = "active" | "grace" | "read_only" | "missing";
+
+function computeLicenseState(status: {
+  licensed_year: number;
+  days_left: number;
+  grace_days: number;
+} | null): { state: LicenseState; expiresAt: Date | null; graceDaysLeft: number } {
+  if (!status) return { state: "missing", expiresAt: null, graceDaysLeft: 0 };
+  const expiresAt = new Date(status.licensed_year, 11, 31, 23, 59, 59);
+  if (status.days_left >= 0) return { state: "active", expiresAt, graceDaysLeft: 0 };
+  const daysPastExpiry = -status.days_left;
+  const graceDaysLeft = status.grace_days - daysPastExpiry;
+  if (graceDaysLeft > 0) return { state: "grace", expiresAt, graceDaysLeft };
+  return { state: "read_only", expiresAt, graceDaysLeft: 0 };
+}
+
+const LICENSE_STATE_BADGE: Record<LicenseState, string> = {
+  active: "badge-ok",
+  grace: "badge-warn",
+  read_only: "badge-danger",
+  missing: "badge-archived",
+};
+
+function licenseActivityLabel(t: (k: string) => string, action: string): string {
+  const key = `lic_activity_${action}`;
+  const translated = t(key);
+  if (translated !== key) return translated;
+  return action.replace(/_/g, " ");
+}
+
+// Dot colour per audit action — green for grants/activations, blue for a
+// direct override, red for a deletion. Anything unrecognised falls back to
+// the neutral "info" blue rather than guessing at severity.
+const LICENSE_ACTIVITY_DOT: Record<string, string> = {
+  generate_license_key: "bg-lic-ok",
+  redeem_license: "bg-lic-ok",
+  add_license: "bg-lic-ok",
+  set_licensed_year: "bg-lic-info-ink",
+  set_grace_days: "bg-lic-info-ink",
+  edit_license: "bg-cal-warn",
+  delete_license: "bg-danger",
+};
+
+function licenseActivityDetail(t: (k: string) => string, row: LicenseActivityRow): string {
+  const key = `lic_activity_detail_${row.action}`;
+  const raw = t(key);
+  const template = raw === key ? "" : raw;
+  if (template) {
+    return template.replace("{year}", row.entity_id || "").replace("{detail}", row.detail || "");
+  }
+  return row.detail || row.entity_id || "";
+}
+
+function monthGrid(year: number, month: number): (number | null)[][] {
+  const first = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startWeekday = (first.getDay() + 6) % 7; // Monday-first
+  const cells: (number | null)[] = Array(startWeekday).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+function CopyableField({ label, value }: { label: string; value: string }) {
+  const t = useT();
+  return (
+    <div>
+      <div className="text-xs text-muted mb-1">{label}</div>
+      {/* The copy glyph stays 28px so it sits inside the field; its tap area is
+          padded out to 44px via the ::after overlay, matching the touch-target
+          floor the mobile CSS layer applies to inputs and labels app-wide. */}
+      <div className="relative">
+        <input
+          readOnly
+          value={value}
+          className="w-full font-mono text-xs select-all !pr-9"
+          onFocus={(e) => e.target.select()}
+        />
+        <button
+          type="button"
+          title={f(t, "copy", "Copy")}
+          aria-label={`${f(t, "copy", "Copy")} — ${label}`}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7 grid place-items-center rounded-lg text-muted hover:text-ink hover:bg-bg after:absolute after:-inset-2 after:content-['']"
+          onClick={() => navigator.clipboard?.writeText(value)}
+        >
+          <span className="msr text-[15px]">content_copy</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A licence card: numbered step chip + title, optional info icon and right-side action. */
+function StepCard({
+  step,
+  title,
+  info,
+  action,
+  children,
+}: {
+  step: number;
+  title: string;
+  info?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="card p-5 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 h-6 w-6 grid place-items-center rounded-lg bg-bg border border-line text-[11px] font-semibold text-muted">
+            {step}
+          </span>
+          <h2 className="text-sm font-semibold truncate">{title}</h2>
+          {info && (
+            <span className="msr text-[15px] text-muted shrink-0" title={info} aria-label={info}>
+              info
+            </span>
+          )}
+        </div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** The soft blue explainer strip used under the status and grace cards. */
+function LicenseInfoBanner({ title, body }: { title: string; body?: string }) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl bg-lic-info-bg px-3 py-2.5">
+      <span className="msr text-[16px] text-lic-info-ink shrink-0 mt-px">info</span>
+      <div className="min-w-0">
+        <div className="text-xs font-semibold text-lic-info-ink">{title}</div>
+        {body && <div className="text-xs text-lic-info-ink/80 mt-0.5">{body}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** One bordered entitlement row: leading glyph, label, trailing granted/withheld mark. */
+function EntitlementRow({ icon, label, granted }: { icon: string; label: string; granted: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-xl border border-line px-3 py-2.5">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="msr text-[16px] text-muted shrink-0">{icon}</span>
+        <span className="text-sm text-ink truncate">{label}</span>
+      </div>
+      <span className={`msr text-[17px] shrink-0 ${granted ? "text-lic-ok" : "text-lic-off"}`}>
+        {granted ? "check_circle" : "do_not_disturb_on"}
+      </span>
+    </div>
+  );
+}
+
+function LicenseOverviewGrid({
+  status,
+  activity,
+  yearSel,
+  setYearSel,
+  onUnlock,
+  onGraceDaysSaved,
+}: {
+  status: {
+    licensed_year: number;
+    current_year: number;
+    year_options: number[];
+    days_left: number;
+    renewal_due: boolean;
+    grace_days: number;
+    installation_id: string;
+    license_key: string;
+    redeemed_years: number[];
+    issued_at: string | null;
+    activated_at: string | null;
+    latest_license: LicenseRow | null;
+  };
+  activity: LicenseActivityRow[];
+  yearSel: number;
+  setYearSel: (y: number) => void;
+  onUnlock: () => void;
+  onGraceDaysSaved: () => void;
+}) {
+  const t = useT();
+  const { lang } = useI18n();
+  const toast = useToast();
+  const { state, expiresAt } = computeLicenseState(status);
+  const latest = status.latest_license;
+
+  // The bar spans this licence's start through the END of the following year, so
+  // the locked stretch past expiry is visible rather than implied.
+  const startAt = latest?.purchase_date
+    ? new Date(latest.purchase_date)
+    : new Date(status.licensed_year, 0, 1);
+  const expiry = expiresAt ?? new Date(status.licensed_year, 11, 31);
+  const barEnd = new Date(status.licensed_year + 1, 11, 31);
+  const span = barEnd.getTime() - startAt.getTime();
+  const pct = (d: Date) =>
+    span > 0 ? Math.min(100, Math.max(0, ((d.getTime() - startAt.getTime()) / span) * 100)) : 0;
+  const elapsedPct = pct(new Date());
+  const expiryPct = pct(expiry);
+
+  const [graceInput, setGraceInput] = useState(status.grace_days);
+  const [graceBusy, setGraceBusy] = useState(false);
+  useEffect(() => setGraceInput(status.grace_days), [status.grace_days]);
+
+  const [activityExpanded, setActivityExpanded] = useState(false);
+  const visibleActivity = activityExpanded ? activity.slice(0, 50) : activity.slice(0, 4);
+
+  async function saveGraceDays() {
+    setGraceBusy(true);
+    try {
+      await apiPut("/api/license/grace-days", { days: graceInput });
+      toast.success(f(t, "saved", "Saved"));
+      onGraceDaysSaved();
+    } catch (e: any) {
+      toast.error(t(e?.key || "error"));
+    } finally {
+      setGraceBusy(false);
+    }
+  }
+
+  const stateLabel = f(t, `lic_state_${state}`, {
+    active: "Active",
+    grace: "Grace period",
+    read_only: "Read-only",
+    missing: "Not licensed",
+  }[state]);
+  const planLabel = f(t, "lic_plan_business", "Business");
+  const headline = [latest?.licensee, planLabel, status.licensed_year].filter(Boolean).join(" ");
+  const maxDateLabel = fmtDate(expiry.toISOString(), lang);
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* 1 — Licence status */}
+      <StepCard step={1} title={f(t, "lic_status_title", "Licence status")}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 space-y-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-pill px-2.5 py-1 text-xs font-medium ${
+                state === "active"
+                  ? "bg-lic-ok-bg text-lic-ok-ink"
+                  : state === "grace"
+                  ? "bg-warn/15 text-warn"
+                  : state === "read_only"
+                  ? "bg-danger/12 text-danger"
+                  : "bg-lic-off-bg text-lic-off"
+              }`}
+            >
+              <span className="msr text-[14px]">
+                {state === "active" ? "check_circle" : state === "missing" ? "do_not_disturb_on" : "error"}
+              </span>
+              {stateLabel}
+            </span>
+            <div className="text-lg font-semibold text-ink leading-tight truncate">{headline}</div>
+            <div className="text-xs text-muted flex items-center gap-1.5">
+              <span className="msr text-[14px]">calendar_month</span>
+              {f(t, "lic_valid_from", "Valid from {d}").replace("{d}", fmtDate(startAt.toISOString(), lang))}
+              {" · "}
+              {f(t, "lic_expires_on", "Expires on {d}").replace("{d}", maxDateLabel)}
+            </div>
+          </div>
+          <div className="shrink-0 rounded-xl bg-lic-ok-bg px-3 py-2 text-center">
+            <div className="text-xl font-semibold text-lic-ok-ink leading-none">
+              {Math.max(0, status.days_left)}
+            </div>
+            <div className="text-[11px] text-lic-ok-ink/80 mt-1">
+              {f(t, "lic_days_remaining", "Days remaining")}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="text-xs text-muted">{f(t, "lic_period_coverage", "Licence period coverage")}</div>
+          <div className="relative h-1.5 rounded-full bg-lic-off-bg">
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-lic-ok"
+              style={{ width: `${elapsedPct}%` }}
+            />
+            {/* Everything past expiry is locked — mark the boundary, not just the end. */}
+            <div
+              className="absolute -top-1 h-3.5 w-px bg-lic-off"
+              style={{ left: `${expiryPct}%` }}
+              aria-hidden
+            />
+            <span
+              className="msr text-[13px] text-lic-off absolute -top-[7px]"
+              style={{ left: `calc(${expiryPct}% + 3px)` }}
+              aria-hidden
+            >
+              lock
+            </span>
+          </div>
+          <div className="relative h-4 text-[10px] text-muted">
+            <span className="absolute left-0">{fmtDate(startAt.toISOString(), lang)}</span>
+            <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${expiryPct}%` }}>
+              {maxDateLabel}
+            </span>
+            <span className="absolute right-0">{fmtDate(barEnd.toISOString(), lang)}</span>
+          </div>
+        </div>
+
+        <LicenseInfoBanner
+          title={f(t, "lic_reservations_until", "Reservations allowed until {d}").replace("{d}", maxDateLabel)}
+          body={f(t, "lic_horizon_help", "The calendar and timeline booking horizon are limited by your licence.")}
+        />
+
+        <div className="flex items-end gap-3 flex-wrap pt-1 border-t border-line">
+          <Field label={f(t, "unlock_year", "Unlock year")}>
+            <select value={yearSel} onChange={(e) => setYearSel(+e.target.value)}>
+              {(status.year_options || []).map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <button className="btn btn-primary" onClick={onUnlock}>
+            {f(t, "unlock_btn", "Unlock")}
+          </button>
+        </div>
+      </StepCard>
+
+      {/* 2 — Licence details */}
+      <StepCard step={2} title={f(t, "lic_details_title", "Licence details")}>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label={f(t, "lic_plan", "Licence plan")}>
+            <select disabled value="business">
+              <option value="business">{planLabel}</option>
+            </select>
+          </Field>
+          <Field label={f(t, "lic_term", "Term")}>
+            <select disabled value="annual">
+              <option value="annual">{f(t, "lic_term_annual", "Annual")}</option>
+            </select>
+          </Field>
+          <Field label={f(t, "lic_year", "Licence year")}>
+            <select disabled value={status.licensed_year}>
+              <option value={status.licensed_year}>{status.licensed_year}</option>
+            </select>
+          </Field>
+        </div>
+        <CopyableField label={f(t, "lic_key", "Licence key")} value={status.license_key} />
+        <CopyableField label={f(t, "lic_installation_id", "Installation ID")} value={status.installation_id} />
+        <div className="grid grid-cols-2 gap-4 pt-1">
+          <div>
+            <div className="text-xs text-muted">{f(t, "lic_issued_at", "Issued at")}</div>
+            <div className="text-sm text-ink">{status.issued_at ? fmtDate(status.issued_at, lang) : "—"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted">{f(t, "lic_activated_at", "Activated at")}</div>
+            <div className="text-sm text-ink">{status.activated_at ? fmtDate(status.activated_at, lang) : "—"}</div>
+          </div>
+        </div>
+      </StepCard>
+
+      {/* 3 — Reservation coverage */}
+      <StepCard
+        step={3}
+        title={f(t, "lic_coverage_title", "Reservation coverage")}
+        info={f(t, "lic_horizon_help", "The calendar and timeline booking horizon are limited by your licence.")}
+      >
+        <div className="text-xs text-muted">
+          {f(t, "lic_coverage_help", "Bookings with checkout dates after {y} are blocked.").replace(
+            "{y}",
+            maxDateLabel
+          )}
+        </div>
+        <CoverageCalendar expiresAt={expiry} lang={lang} />
+        <div className="flex items-center gap-4 text-xs text-muted">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-lic-ok inline-block" />
+            {f(t, "lic_allowed", "Allowed")}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-lic-off inline-block" />
+            {f(t, "lic_blocked", "Blocked")}
+          </span>
+        </div>
+        <div className="text-xs text-muted pt-3 border-t border-line">
+          {f(t, "lic_coverage_footer", "Your timeline and calendar are limited to {y}.").replace(
+            "{y}",
+            maxDateLabel
+          )}
+        </div>
+      </StepCard>
+
+      {/* 4 — Feature entitlements */}
+      <StepCard step={4} title={f(t, "lic_features_title", "Feature entitlements")}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {LICENSE_FEATURES.map(({ code, icon }) => (
+            <EntitlementRow
+              key={code}
+              icon={icon}
+              label={f(t, `lic_feature_${code}`, code[0].toUpperCase() + code.slice(1))}
+              granted
+            />
+          ))}
+        </div>
+        <div className="text-xs text-muted">
+          {f(t, "lic_features_help", "Feature availability is determined by your licence plan.")}
+        </div>
+      </StepCard>
+
+      {/* 5 — Grace period & enforcement */}
+      <StepCard step={5} title={f(t, "lic_grace_title", "Grace period & enforcement")}>
+        <div className="flex gap-4">
+          <div className="shrink-0 w-28 rounded-xl border border-line overflow-hidden text-center">
+            <div className="text-[11px] text-muted bg-bg px-2 py-1.5 border-b border-line">
+              {f(t, "lic_grace_short", "Grace period")}
+            </div>
+            <div className="px-2 py-3 space-y-2">
+              <input
+                type="number"
+                min={0}
+                max={90}
+                value={graceInput}
+                onChange={(e) => setGraceInput(+e.target.value)}
+                aria-label={f(t, "lic_grace_days_label", "Grace period (days)")}
+                className="w-full !text-2xl !font-semibold text-center !px-1"
+              />
+              <div className="text-[11px] text-muted leading-tight">
+                {f(t, "lic_grace_days_after", "days after expiry")}
+              </div>
+              <button
+                className="btn btn-primary w-full !py-1 !px-2 text-xs"
+                disabled={graceBusy || graceInput === status.grace_days}
+                onClick={saveGraceDays}
+              >
+                {f(t, "update_btn", "Save")}
+              </button>
+            </div>
+          </div>
+          <div className="min-w-0 space-y-3">
+            <div>
+              <div className="text-xs font-medium text-ink mb-1.5">
+                {f(t, "lic_grace_during", "During the grace period you can:")}
+              </div>
+              <ul className="space-y-1.5 text-xs text-ink">
+                <li className="flex items-center gap-1.5">
+                  <span className="msr text-[15px] text-lic-ok shrink-0">check_circle</span>
+                  {f(t, "lic_grace_access", "Access system and data")}
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <span className="msr text-[15px] text-lic-ok shrink-0">check_circle</span>
+                  {f(t, "lic_grace_manage", "Create and manage reservations")}
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <LicenseInfoBanner
+          title={f(t, "lic_grace_notice", "A reminder threshold only — this installation never locks you out.")}
+        />
+      </StepCard>
+
+      {/* 6 — Licence activity */}
+      <StepCard
+        step={6}
+        title={f(t, "lic_activity_title", "Licence activity")}
+        action={
+          activity.length > visibleActivity.length || activityExpanded ? (
+            <button type="button" className="btn !py-1 !px-2.5 text-xs" onClick={() => setActivityExpanded((v) => !v)}>
+              {activityExpanded ? f(t, "lic_show_less", "Show less") : f(t, "lic_view_all", "View all")}
+            </button>
+          ) : undefined
+        }
+      >
+        <div className="space-y-3.5">
+          {visibleActivity.map((row) => (
+            <div key={row.id} className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <span
+                  className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                    LICENSE_ACTIVITY_DOT[row.action] || "bg-lic-info-ink"
+                  }`}
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">{licenseActivityLabel(t, row.action)}</div>
+                  <div className="text-xs text-muted truncate">{licenseActivityDetail(t, row)}</div>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-xs text-muted whitespace-nowrap">{fmtDate(row.ts, lang)}</div>
+                <div className="text-[11px] text-muted">{row.username}</div>
+              </div>
+            </div>
+          ))}
+          {activity.length === 0 && (
+            <div className="text-xs text-muted">{f(t, "no_results", "No records")}</div>
+          )}
+        </div>
+      </StepCard>
+    </div>
+  );
+}
+
+/**
+ * Two static months straddling the licence cutoff — the expiry month and the one
+ * after it, so the allowed→blocked boundary is always what the reader sees.
+ */
+function CoverageCalendar({ expiresAt, lang }: { expiresAt: Date; lang: string }) {
+  const months = [0, 1].map((offset) => {
+    const d = new Date(expiresAt.getFullYear(), expiresAt.getMonth() + offset, 1);
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const monthFmt = new Intl.DateTimeFormat(lang || "en", { month: "short", year: "numeric" });
+  const weekdayFmt = new Intl.DateTimeFormat(lang || "en", { weekday: "narrow" });
+  // 1 Jan 2024 was a Monday, so offsets 0..6 walk Mon..Sun — matching monthGrid.
+  const weekdayLabels = [0, 1, 2, 3, 4, 5, 6].map((d) => weekdayFmt.format(new Date(2024, 0, 1 + d)));
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const firstBlocked = new Date(expiresAt.getFullYear(), expiresAt.getMonth(), expiresAt.getDate() + 1);
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {months.map(({ year, month }) => (
+        <div key={`${year}-${month}`}>
+          <div className="text-[11px] font-semibold text-muted uppercase mb-1.5">
+            {monthFmt.format(new Date(year, month, 1))}
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 mb-1">
+            {weekdayLabels.map((w, i) => (
+              <div key={i} className="text-[9px] text-muted text-center">
+                {w}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-0.5">
+            {monthGrid(year, month)
+              .flat()
+              .map((day, i) => {
+                if (day == null) return <div key={i} className="h-5" />;
+                const cell = new Date(year, month, day);
+                const blocked = cell > expiresAt;
+                const isCutoff = sameDay(cell, firstBlocked);
+                const isLastAllowed = sameDay(cell, expiresAt);
+                return (
+                  <div
+                    key={i}
+                    title={cell.toLocaleDateString(lang || "en")}
+                    className={`text-[10px] leading-none rounded grid place-items-center h-5 w-full ${
+                      blocked ? "bg-lic-off-bg text-lic-off-ink" : "bg-lic-ok-bg text-lic-ok-ink"
+                    } ${isLastAllowed ? "ring-1 ring-lic-ok font-semibold" : ""}`}
+                  >
+                    {isCutoff ? <span className="msr text-[11px]">lock</span> : day}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LicenseTab() {
   const fmt = useMoney();
   const t = useT();
@@ -1203,7 +1783,17 @@ function LicenseTab() {
     licensed_year: number;
     current_year: number;
     year_options: number[];
+    days_left: number;
+    renewal_due: boolean;
+    grace_days: number;
+    installation_id: string;
+    license_key: string;
+    redeemed_years: number[];
+    issued_at: string | null;
+    activated_at: string | null;
+    latest_license: LicenseRow | null;
   } | null>(null);
+  const [activity, setActivity] = useState<LicenseActivityRow[]>([]);
   const [yearSel, setYearSel] = useState<number>(0);
   const [rows, setRows] = useState<LicenseRow[]>([]);
   const [adding, setAdding] = useState(false);
@@ -1225,6 +1815,7 @@ function LicenseTab() {
         if (d) setYearSel(d.licensed_year);
       })
       .catch(() => {});
+    apiGet<LicenseActivityRow[]>("/api/license/activity").then(setActivity).catch(() => {});
     // Every date picker in the app caps itself at the licensed year, so re-read
     // the shared cap here rather than leaving them stale until a page reload.
     refreshLicenseLimits();
@@ -1280,10 +1871,15 @@ function LicenseTab() {
       setRedeemMsg({ ok: true, m: okMsg });
       toast.success(okMsg);
     } catch (e: any) {
-      setRedeemMsg({
-        ok: false,
-        m: f(t, e?.key || "error", e?.key === "invalid_key" ? "Invalid license key" : "Error"),
-      });
+      const fallback =
+        e?.key === "invalid_key"
+          ? "Invalid license key"
+          : e?.key === "key_already_used"
+          ? "This license key has already been used"
+          : e?.key === "key_already_covered"
+          ? "This year is already covered by your current license"
+          : "Error";
+      setRedeemMsg({ ok: false, m: f(t, e?.key || "error", fallback) });
     }
   }
 
@@ -1328,50 +1924,20 @@ function LicenseTab() {
     <div className="space-y-4">
       <Notice ok={msg.ok} msg={msg.m} />
 
-      {canGenerate && (
-      <SectionCard title={f(t, "license_status", "License Status")} icon="workspace_premium">
-        <div className="text-sm">
-          {f(t, "licensed_until", "Licensed until year")}:{" "}
-          <span className="font-semibold text-ink">{status?.licensed_year ?? "—"}</span>
-        </div>
-        {/* The cap is enforced on every write, not just in the pickers — spell
-            out the last day it allows so it reads as a hard limit. */}
-        {status && (
-          <div className="text-xs text-muted flex items-center gap-1.5">
-            <span className="msr text-[14px]">lock_clock</span>
-            {licenseCapNote((k) => t(k), {
-              licensed_year: status.licensed_year,
-              current_year: status.current_year,
-              max_date: `${status.licensed_year}-12-31`,
-              next_year: status.licensed_year + 1,
-              days_left: 0,
-              renewal_due: false,
-            })}
-          </div>
-        )}
-        <div className="flex items-end gap-3 flex-wrap">
-          <Field label={f(t, "unlock_year", "Unlock year")}>
-            <select value={yearSel} onChange={(e) => setYearSel(+e.target.value)}>
-              {(status?.year_options || []).map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              run(async () => {
-                await apiPut("/api/license/year", { year: yearSel });
-                load();
-              }, f(t, "saved", "Saved"))
-            }
-          >
-            {f(t, "unlock_btn", "Unlock")}
-          </button>
-        </div>
-      </SectionCard>
+      {canGenerate && status && (
+        <LicenseOverviewGrid
+          status={status}
+          activity={activity}
+          yearSel={yearSel}
+          setYearSel={setYearSel}
+          onUnlock={() =>
+            run(async () => {
+              await apiPut("/api/license/year", { year: yearSel });
+              load();
+            }, f(t, "saved", "Saved"))
+          }
+          onGraceDaysSaved={refreshStatus}
+        />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1392,20 +1958,25 @@ function LicenseTab() {
               </button>
             </div>
             {genKey && (
-              <div className="flex items-center gap-2">
-                <input
-                  readOnly
-                  value={genKey}
-                  className="flex-1 font-mono text-xs select-all"
-                  onFocus={(e) => e.target.select()}
-                />
-                <button
-                  className="btn !py-1.5 !px-3 text-xs"
-                  title={f(t, "copy", "Copy")}
-                  onClick={() => navigator.clipboard?.writeText(genKey)}
-                >
-                  <span className="msr text-[16px]">content_copy</span>
-                </button>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={genKey}
+                    className="flex-1 font-mono text-xs select-all"
+                    onFocus={(e) => e.target.select()}
+                  />
+                  <button
+                    className="btn !py-1.5 !px-3 text-xs"
+                    title={f(t, "copy", "Copy")}
+                    onClick={() => navigator.clipboard?.writeText(genKey)}
+                  >
+                    <span className="msr text-[16px]">content_copy</span>
+                  </button>
+                </div>
+                {status?.redeemed_years.includes(genYear) && (
+                  <span className="badge badge-archived">{f(t, "lic_key_used", "Already used")}</span>
+                )}
               </div>
             )}
           </SectionCard>

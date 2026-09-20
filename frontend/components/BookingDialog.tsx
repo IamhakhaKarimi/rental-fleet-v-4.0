@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { api, apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/lib/toast";
@@ -22,6 +22,16 @@ interface FreeCar {
   license_plate: string;
   base_daily_rate: number;
 }
+
+// ISO region codes let the browser provide names in the selected UI language
+// (for example Türkiye in Turkish and Turqia in Albanian), rather than keeping
+// the type-ahead list permanently in English.
+const COUNTRY_CODES = [
+  "AF", "AL", "DZ", "AD", "AO", "AR", "AM", "AU", "AT", "AZ", "BS", "BH", "BD", "BE", "BA", "BR", "BG", "CA", "CL", "CN",
+  "CO", "HR", "CY", "CZ", "DK", "EG", "EE", "FI", "FR", "GE", "DE", "GR", "HU", "IS", "IN", "ID", "IE", "IL", "IT", "JP",
+  "XK", "LV", "LT", "LU", "MT", "MX", "MD", "ME", "MA", "NL", "MK", "NO", "PK", "PL", "PT", "RO", "RS", "SK", "SI", "ZA",
+  "KR", "ES", "SE", "CH", "TR", "UA", "AE", "GB", "US",
+] as const;
 
 /** +/- stepper wrapped around a numeric input — same control for rate, deposit
  *  and days, so the three numeric fields read and behave identically. */
@@ -120,7 +130,7 @@ export function BookingDialog({
    *  wide two-column layout; the others don't). */
   onStepChange?: (step: StepId) => void;
 }) {
-  const { t } = useI18n();
+  const { t, lang: uiLang } = useI18n();
   const toast = useToast();
   const fmt = useMoney();
   const { user } = useAuth();
@@ -147,13 +157,27 @@ export function BookingDialog({
   const [name, setName] = useState(editRental?.client_name || "");
   const [phone, setPhone] = useState(editRental?.phone || "");
   const [idp, setIdp] = useState(editRental?.id_passport || "");
+  const [country, setCountry] = useState("");
   const [rate, setRate] = useState(editRental ? Math.round((editRental.daily_rate || 0) / 100) : 30);
   const [deposit, setDeposit] = useState(editRental ? Math.round((editRental.deposit || 0) / 100) : 0);
   const [lang, setLang] = useState("tr");
   const [langs, setLangs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [err, setErr] = useState("");
   const [activeStep, setActiveStep] = useState<StepId>("period");
+
+  const countries = useMemo(() => {
+    // `Intl.DisplayNames` is supported by current browsers. The code fallback
+    // keeps the picker usable in an older embedded browser too.
+    try {
+      const locale = uiLang === "sq" ? "sq" : uiLang === "tr" ? "tr" : "en";
+      const names = new Intl.DisplayNames([locale], { type: "region" });
+      return COUNTRY_CODES.map((code) => names.of(code) || code).sort((a, b) => a.localeCompare(b, locale));
+    } catch {
+      return [...COUNTRY_CODES];
+    }
+  }, [uiLang]);
 
   useEffect(() => {
     apiGet<LanguagesInfo>("/api/i18n/languages").then((d) => setLangs(d.languages)).catch(() => {});
@@ -162,6 +186,27 @@ export function BookingDialog({
   useEffect(() => {
     onStepChange?.(activeStep);
   }, [activeStep, onStepChange]);
+
+  async function downloadBulkReservationForm() {
+    setBulkBusy(true);
+    try {
+      const res = await api(
+        `/api/timeline/bulk-reservations.pdf?lang=${encodeURIComponent(uiLang || "tr")}`,
+        { raw: true }
+      );
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "bulk-reservation-form.pdf";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error(tf(e?.key || "error", "Could not download the bulk reservation form."));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   // ── License cap ──────────────────────────────────────────────────────────
   // The return date is *derived* from `days`, so the cap has to bite on the day
@@ -299,6 +344,7 @@ export function BookingDialog({
         client_name: name,
         phone,
         id_passport: idp,
+        country,
         start_date: startDate,
         start_time: startTime,
         days,
@@ -372,7 +418,23 @@ export function BookingDialog({
 
   return (
     <div className="flex gap-3 min-w-0 h-full max-lg:flex-col max-lg:gap-2.5">
-      <StepSidebar steps={steps} activeId={activeStep} onSelect={(id) => setActiveStep(id as StepId)} />
+      <StepSidebar
+        steps={steps}
+        activeId={activeStep}
+        onSelect={(id) => setActiveStep(id as StepId)}
+        footer={!isEdit ? (
+          <button
+            type="button"
+            className="btn w-full !mt-1 justify-center"
+            onClick={downloadBulkReservationForm}
+            disabled={bulkBusy}
+            title={tf("bulk_reservation_form", "Print Bulk Reservation Form")}
+          >
+            <span className="msr text-[17px]">print</span>
+            {bulkBusy ? tf("loading", "Working…") : tf("bulk_reservation_form", "Print Bulk Reservation Form")}
+          </button>
+        ) : undefined}
+      />
 
         <div className="flex-1 min-w-0 flex flex-col gap-2.5">
           {/* `flex-1`: the panel is now a fixed, generous desktop height
@@ -613,6 +675,20 @@ export function BookingDialog({
                     onChange={(e) => setIdp(e.target.value)}
                   />
                 </label>
+                <label className={lbl}>
+                  {tf("client_country", "Country")}
+                  <input
+                    className="!py-1.5"
+                    list="client-country-options"
+                    value={country}
+                    onChange={(e) => setCountry(e.target.value)}
+                    placeholder={tf("country_placeholder", "Start typing a country")}
+                    autoComplete="country-name"
+                  />
+                </label>
+                <datalist id="client-country-options">
+                  {countries.map((item) => <option key={item} value={item} />)}
+                </datalist>
               </>
             )}
           </div>

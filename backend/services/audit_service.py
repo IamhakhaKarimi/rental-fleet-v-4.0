@@ -17,3 +17,7 @@ def record(user: dict | None, action: str, entity: str = "",
 
 def recent(limit: int = 100) -> list[dict]:
     return audit_repo.list_recent(limit)
+
+
+def recent_by_entity(entity: str, limit: int = 100) -> list[dict]:
+    return audit_repo.list_recent_by_entity(entity, limit)

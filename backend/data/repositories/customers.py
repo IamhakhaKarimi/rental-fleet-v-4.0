@@ -11,7 +11,7 @@ def _digits(phone: str) -> str:
     return re.sub(r"\D", "", phone or "")
 
 
-def get_or_create_customer(full_name: str, phone: str, id_passport: str) -> int:
+def get_or_create_customer(full_name: str, phone: str, id_passport: str, country: str = "") -> int:
     """Look up an existing customer before inserting a new row.
 
     Matches on full_name (exact, post-normalization by the caller) AND on the
@@ -24,6 +24,7 @@ def get_or_create_customer(full_name: str, phone: str, id_passport: str) -> int:
     full_name = (full_name or "").strip()
     phone = (phone or "").strip()
     id_passport = (id_passport or "").strip()
+    country = (country or "").strip()
     phone_digits = _digits(phone)
     with get_engine().begin() as conn:
         candidates = conn.execute(
@@ -37,27 +38,29 @@ def get_or_create_customer(full_name: str, phone: str, id_passport: str) -> int:
         if existing is not None:
             return int(existing)
         result = conn.execute(
-            text("INSERT INTO customers (full_name,phone,id_passport) VALUES (:n,:p,:i) "
+            text("INSERT INTO customers (full_name,phone,id_passport,country) VALUES (:n,:p,:i,:c) "
                  "RETURNING customer_id"),
-            {"n": full_name, "p": phone, "i": id_passport}
+            {"n": full_name, "p": phone, "i": id_passport, "c": country}
         )
         return int(result.scalar_one())
 
 
-def update_customer(customer_id: int, full_name: str, phone: str, id_passport: str):
+def update_customer(customer_id: int, full_name: str, phone: str, id_passport: str, country: str | None = None):
     with get_engine().begin() as conn:
         conn.execute(text("""
-            UPDATE customers SET full_name=:n, phone=:p, id_passport=:i
+            UPDATE customers SET full_name=:n, phone=:p, id_passport=:i,
+                country=COALESCE(:c, country)
             WHERE customer_id=:cid
         """), {"n": (full_name or "").strip(), "p": (phone or "").strip(),
-               "i": (id_passport or "").strip(), "cid": customer_id})
+               "i": (id_passport or "").strip(),
+               "c": country.strip() if country is not None else None, "cid": customer_id})
 
 
 def get_customer(customer_id: int) -> dict | None:
     """Fetch one customer row by id (plain dict), or None if missing."""
     with db_read() as conn:
         row = conn.execute(
-            text("SELECT customer_id, full_name, phone, id_passport "
+            text("SELECT customer_id, full_name, phone, id_passport, country "
                  "FROM customers WHERE customer_id = :cid"),
             {"cid": customer_id},
         ).mappings().first()
@@ -71,7 +74,7 @@ def list_customers_enriched() -> list[dict]:
     (no SQLite-only syntax) — a LEFT JOIN + GROUP BY for the count/last date, plus
     a correlated subquery for the latest booker, identical in style to
     `list_customers()`."""
-    sql = """SELECT c.customer_id, c.full_name, c.phone, c.id_passport,
+    sql = """SELECT c.customer_id, c.full_name, c.phone, c.id_passport, c.country,
                     COUNT(r.deal_id) AS rental_count,
                     SUM(CASE WHEN r.status = 'Active' THEN 1 ELSE 0 END) AS active_count,
                     MAX(r.start_dt) AS last_rental_date,
@@ -89,7 +92,7 @@ def list_customers_enriched() -> list[dict]:
                        ORDER BY r2.start_dt DESC, r2.deal_id DESC LIMIT 1) AS last_plate
              FROM customers c
              LEFT JOIN rentals r ON r.customer_id = c.customer_id
-             GROUP BY c.customer_id, c.full_name, c.phone, c.id_passport
+             GROUP BY c.customer_id, c.full_name, c.phone, c.id_passport, c.country
              ORDER BY c.full_name"""
     with db_read() as conn:
         return [dict(x) for x in conn.execute(text(sql)).mappings().all()]
@@ -102,7 +105,7 @@ def list_customers() -> list[dict]:
     # rental (name + role) for the "Registered by" column, and — for the
     # currently-renting card view — the car/plate/negotiated-rate of their most
     # recent ACTIVE rental (NULL for customers with no live rental).
-    sql = """SELECT c.customer_id, c.full_name, c.phone, c.id_passport,
+    sql = """SELECT c.customer_id, c.full_name, c.phone, c.id_passport, c.country,
                     COUNT(r.deal_id) AS rental_count,
                     SUM(CASE WHEN r.status = 'Active' THEN 1 ELSE 0 END) AS active_count,
                     MAX(r.start_dt) AS last_rental,

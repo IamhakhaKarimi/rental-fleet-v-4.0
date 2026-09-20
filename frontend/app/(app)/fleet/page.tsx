@@ -510,7 +510,7 @@ export default function FleetPage() {
   // Always-reserved photo placeholder — most vehicles have no photo yet, so
   // this stands in rather than collapsing the card's photo area to nothing.
   const photoPlaceholder = (
-    <div className="h-[190px] w-full rounded-[14px] bg-bg border border-line flex items-center justify-center text-muted">
+    <div className="fleet-card-photo h-[190px] w-full rounded-[14px] bg-bg border border-line flex items-center justify-center text-muted">
       <span className="msr text-[40px]">directions_car</span>
     </div>
   );
@@ -553,6 +553,9 @@ export default function FleetPage() {
         <SwipeDeck
           items={vehicles}
           keyOf={(v) => v.vehicle_id}
+          deckClassName="fleet-deck"
+          cardClassName="fleet-deck-item"
+          gap={10}
           empty={<div className="text-sm text-muted">{t("no_cars")}</div>}
           render={(v) => (
             <VehicleCard
@@ -561,7 +564,7 @@ export default function FleetPage() {
                 <VehicleThumb
                   vehicleId={v.vehicle_id}
                   src={thumbs[v.vehicle_id]}
-                  className="h-[190px] w-full object-cover rounded-[14px]"
+                  className="fleet-card-photo h-[190px] w-full object-cover rounded-[14px]"
                   fallback={photoPlaceholder}
                 />
               }

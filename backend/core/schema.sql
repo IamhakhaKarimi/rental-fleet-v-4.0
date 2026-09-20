@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS customers (
     full_name     TEXT NOT NULL,
     phone         TEXT NOT NULL DEFAULT '',
     id_passport   TEXT NOT NULL DEFAULT '',
+    country       TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS rentals (
     created_by_name TEXT NOT NULL DEFAULT '',   -- their full name (snapshot)
     created_by_role TEXT NOT NULL DEFAULT '',   -- their role id (snapshot)
     invoice_lang    TEXT NOT NULL DEFAULT 'tr', -- language chosen for this rental's invoice
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS charges (

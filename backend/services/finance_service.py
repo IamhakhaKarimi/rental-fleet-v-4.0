@@ -35,13 +35,13 @@ def revenue_summary() -> dict:
 
 
 def revenue_by_vehicle() -> list[dict]:
-    sql = f"""SELECT c.vehicle_id, v.make_model,
+    sql = f"""SELECT c.vehicle_id, v.make_model, v.license_plate,
                COALESCE(SUM(CASE WHEN c.type IN {_REVENUE_TYPES}
                                  THEN c.amount END),0) AS revenue
              FROM charges c
              LEFT JOIN vehicles v ON v.vehicle_id=c.vehicle_id
              WHERE c.deleted_at IS NULL
-             GROUP BY c.vehicle_id,v.make_model
+             GROUP BY c.vehicle_id,v.make_model,v.license_plate
              HAVING revenue>0
              ORDER BY revenue DESC"""
     with db_read() as conn:
@@ -165,8 +165,10 @@ def profit_by_vehicle() -> list[dict]:
     for vid in set(inc) | set(cst):
         i = (inc.get(vid) or {}).get("revenue", 0) or 0
         c = (cst.get(vid) or {}).get("cost", 0) or 0
-        model = (inc.get(vid) or cst.get(vid) or {}).get("make_model") or "—"
+        source = inc.get(vid) or cst.get(vid) or {}
+        model = source.get("make_model") or "—"
         rows.append({"vehicle_id": vid, "make_model": model,
+                     "license_plate": source.get("license_plate") or "",
                      "income": i, "cost": c, "net": i - c})
     rows.sort(key=lambda r: r["net"], reverse=True)
     return rows

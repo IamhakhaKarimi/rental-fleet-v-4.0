@@ -60,10 +60,10 @@ def _report(slug: str):
 
     if slug == "by_vehicle":
         data = fin.profit_by_vehicle()
-        rows = [[d["vehicle_id"], d["make_model"], _eur(d["income"]), _eur(d["cost"]), _eur(d["net"])] for d in data]
-        total = ["TOTAL", "", _eur(sum(d["income"] for d in data)),
+        rows = [[d["vehicle_id"], d["make_model"], d.get("license_plate") or "—", _eur(d["income"]), _eur(d["cost"]), _eur(d["net"])] for d in data]
+        total = ["TOTAL", "", "", _eur(sum(d["income"] for d in data)),
                  _eur(sum(d["cost"] for d in data)), _eur(sum(d["net"] for d in data))]
-        return "Profit by Vehicle", ["Vehicle", "Model", "Income", "Cost", "Net"], rows, total
+        return "Profit by Vehicle", ["Vehicle", "Model", "License Plate", "Income", "Cost", "Net"], rows, total
 
     if slug == "by_customer":
         data = fin.revenue_by_customer()

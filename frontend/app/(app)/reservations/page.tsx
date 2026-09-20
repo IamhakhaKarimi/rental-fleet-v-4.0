@@ -154,6 +154,9 @@ export default function ReservationsPage() {
           <SwipeDeck
             items={filtered}
             keyOf={(r) => r.deal_id}
+            deckClassName="reservation-deck"
+            cardClassName="reservation-deck-item"
+            gap={10}
             empty={
               <div className="text-sm text-muted">
                 {rentals.length === 0 ? t("timeline_empty") : tf("no_results", "No matching clients.")}
@@ -209,10 +212,10 @@ export default function ReservationsPage() {
                         <button
                           className="btn !py-1.5 !px-3 text-xs"
                           onClick={() => setManage(r)}
-                          title={tf("manage_return", "Manage / Return")}
+                          title={tf("manage_rental", "Manage / Return")}
                         >
                           <span className="msr text-[16px]">tune</span>
-                          {tf("manage", "Manage")}
+                          {tf("manage_rental", "Manage / Return")}
                         </button>
                       </div>
                     </td>
@@ -273,7 +276,7 @@ export default function ReservationsPage() {
 
       {manage && (
         <Modal
-          title={`${tf("manage_return", "Manage / Return")} · ${manage.client_name}`}
+          title={`${tf("manage_rental", "Manage / Return")} · ${manage.client_name}`}
           onClose={() => setManage(null)}
           wide
         >

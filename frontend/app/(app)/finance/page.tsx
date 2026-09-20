@@ -38,6 +38,7 @@ interface PnlRow {
 interface VehicleProfit {
   vehicle_id: string;
   make_model: string;
+  license_plate?: string | null;
   income: number;
   cost: number;
   net: number;
@@ -851,7 +852,7 @@ function VehicleTab({
     () =>
       rows
         .filter((r) => (r.income || 0) > 0)
-        .map((r) => ({ name: r.make_model || r.vehicle_id, value: cents(r.income) })),
+        .map((r) => ({ name: r.license_plate ? `${r.make_model} · ${r.license_plate}` : (r.make_model || r.vehicle_id), value: cents(r.income) })),
     [rows]
   );
   return (
@@ -883,6 +884,7 @@ function VehicleTab({
               <tr key={r.vehicle_id} className="border-b border-line last:border-0">
                 <Td>
                   <span className="font-medium">{r.make_model || "—"}</span>
+                  {r.license_plate && <span className="text-xs text-muted ml-1">· {r.license_plate}</span>}
                   <span className="text-xs text-muted ml-1">{r.vehicle_id}</span>
                 </Td>
                 <Td right>{fmt(r.income)}</Td>

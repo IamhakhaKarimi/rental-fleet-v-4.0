@@ -138,11 +138,11 @@ def cost_by_type_for_month(month: str) -> list[dict]:
 
 
 def cost_by_vehicle() -> list[dict]:
-    sql = """SELECT c.vehicle_id, v.make_model,
+    sql = """SELECT c.vehicle_id, v.make_model, v.license_plate,
                     COALESCE(SUM(c.amount), 0) AS cost
              FROM vehicle_costs c
              LEFT JOIN vehicles v ON v.vehicle_id = c.vehicle_id
              WHERE c.deleted_at IS NULL
-             GROUP BY c.vehicle_id, v.make_model"""
+             GROUP BY c.vehicle_id, v.make_model, v.license_plate"""
     with db_read() as conn:
         return [dict(r) for r in conn.execute(text(sql)).mappings().all()]

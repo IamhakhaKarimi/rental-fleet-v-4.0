@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 export interface Step {
   id: string;
   label: string;
@@ -17,21 +19,21 @@ export function StepSidebar({
   steps,
   activeId,
   onSelect,
+  footer,
 }: {
   steps: Step[];
   activeId: string;
   onSelect: (id: string) => void;
+  footer?: ReactNode;
 }) {
   return (
     // Below `lg` this is a horizontal, scrollable strip above the form instead
     // of a 168px side rail: inside a full-bleed bottom sheet on a 375px phone,
     // a `shrink-0` 168px column left roughly 160px for the entire booking form.
     // Desktop keeps the vertical rail verbatim.
-    <div
-      className="flex gap-1 w-[168px] shrink-0 flex-col
-                 max-lg:w-full max-lg:flex-row max-lg:overflow-x-auto max-lg:pb-1.5 no-scrollbar"
-    >
-      {steps.map((s) => {
+    <div className="flex w-[168px] shrink-0 flex-col gap-2 max-lg:w-full">
+      <div className="flex gap-1 flex-col max-lg:flex-row max-lg:overflow-x-auto max-lg:pb-1.5 no-scrollbar">
+        {steps.map((s) => {
         const active = s.id === activeId;
         return (
           <button
@@ -64,7 +66,9 @@ export function StepSidebar({
             <span className="truncate">{s.label}</span>
           </button>
         );
-      })}
+        })}
+      </div>
+      {footer}
     </div>
   );
 }

@@ -1,4 +1,3 @@
-"use client";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { apiGet } from "./api";
 import { formatMoneyDisplay } from "./money";

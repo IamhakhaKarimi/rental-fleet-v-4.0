@@ -6,30 +6,33 @@
  * still flows, because SameSite ignores the port. The token is never written to
  * `localStorage`/`sessionStorage` anymore (M9: an XSS payload that can read
  * disk used to just lift the session outright). The one case a token is
- * still kept, in memory only, is an explicit REMOTE `NEXT_PUBLIC_API_BASE`
- * (the old Vercel/Render split in DEPLOY.md) — a genuinely cross-site
+ * still kept, in memory only, is an explicit REMOTE `VITE_API_BASE` — a
+ * genuinely cross-site
  * deployment where the cookie cannot follow, so the Bearer header is the
  * only way auth works at all, and losing it on refresh is expected there.
  */
 /**
  * Where the API lives. Three cases, in priority order:
  *
- *   "same-origin"  production. Nginx proxies /api on the SAME origin as the
- *                  page, so there is no host and no port to point at. Returns
- *                  "" — every call site does `${apiBase()}${path}` and path
- *                  already starts with "/api", so it resolves as a plain
- *                  relative fetch.
+ *   unset / "same-origin"   THE DEFAULT, and what both dev and production use.
+ *                  Returns "" — every call site does `${apiBase()}${path}` and
+ *                  path already starts with "/api", so it resolves as a plain
+ *                  relative fetch. In production Nginx proxies /api to uvicorn;
+ *                  in development the Vite dev server proxies it (vite.config.ts).
  *   <remote url>   an API on a genuinely different origin. Used verbatim, and
  *                  it is the only case that turns on the in-memory Bearer token
  *                  (see usesRemoteApi) because the cookie cannot follow there.
- *   loopback/unset local development. `next dev` on :3000 against uvicorn on
- *                  :8001.
+ *   <loopback url> explicit escape hatch for running the frontend without the
+ *                  proxy. Note the host must MATCH the one in the address bar:
+ *                  a page on localhost:3000 talking to 127.0.0.1:8001 is
+ *                  cross-site as far as the cookie is concerned, and
+ *                  SameSite=Strict silently drops it — you get a clean login
+ *                  followed by 401s. Preferring the proxy avoids the whole trap.
  *
- * Note `NEXT_PUBLIC_API_BASE` is inlined by Next at BUILD time, so the
- * production build must be made with it already set to "same-origin".
+ * `VITE_API_BASE` is inlined by Vite at BUILD time, so a production build made
+ * with it set to a dev value would ship that value.
  */
-const CONFIGURED_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
-const DEFAULT_API_PORT = "8001";
+const CONFIGURED_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 const LOOPBACK = /^(localhost|127(?:\.\d+){3}|\[?::1\]?)$/i;
 const SAME_ORIGIN = "same-origin";
 
@@ -42,13 +45,15 @@ function configuredUrl(): URL | null {
 }
 
 export function apiBase(): string {
-  if (CONFIGURED_BASE === SAME_ORIGIN) return "";
+  // Unset is same-origin, not a guessed localhost port: both servers that ever
+  // serve this app proxy /api for us.
+  if (!CONFIGURED_BASE || CONFIGURED_BASE === SAME_ORIGIN) return "";
 
   const u = configuredUrl();
   // A real remote API was configured — always use it as given.
   if (u && !LOOPBACK.test(u.hostname)) return CONFIGURED_BASE;
 
-  return CONFIGURED_BASE || `http://127.0.0.1:${DEFAULT_API_PORT}`;
+  return CONFIGURED_BASE;
 }
 
 let authToken: string | null = null;

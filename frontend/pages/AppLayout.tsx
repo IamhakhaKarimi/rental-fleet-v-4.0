@@ -1,20 +1,19 @@
-"use client";
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { Sidebar } from "@/components/Sidebar";
 import { BottomNav } from "@/components/BottomNav";
 import { Skeleton } from "@/components/Skeleton";
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export function AppLayout() {
   const { user, loading } = useAuth();
   const { setLang } = useI18n();
-  const router = useRouter();
+  const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [user, loading, router]);
+    if (!loading && !user) navigate("/login", { replace: true });
+  }, [user, loading, navigate]);
 
   // Adopt the user's stored UI language on login/restore.
   useEffect(() => {
@@ -43,7 +42,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         className="flex-1 min-w-0 px-4 py-4 md:px-6 md:py-6 lg:px-8 lg:py-7
                    pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-6 lg:pb-7"
       >
-        <div className="min-w-0 max-w-[1200px] mx-auto">{children}</div>
+        <div className="min-w-0 max-w-[1200px] mx-auto">
+          <Outlet />
+        </div>
       </main>
       <BottomNav />
     </div>

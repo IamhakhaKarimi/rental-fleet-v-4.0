@@ -1,15 +1,18 @@
 # Balkan Car Rentals — Fleet Console v4.0
 
-**FastAPI (backend) + Next.js + Tailwind (frontend).** Database: **SQLite** on local
-disk, in development and in production alike — see "Why SQLite" below. Postgres is
-supported and one env var away when the numbers call for it.
+**FastAPI (backend) + React + Tailwind (frontend, built with Vite).** Database:
+**SQLite** on local disk, in development and in production alike — see "Why SQLite"
+below. Postgres is supported and one env var away when the numbers call for it.
 
 ```
 Auto Rental Deploy/
   backend/    FastAPI — config / core / data / services / ui layers
-  frontend/   Next.js App Router + Tailwind
-  nginx/      Production Nginx config + two systemd units
+  frontend/   Vite + React 18 + React Router + Tailwind
+  nginx/      Production Nginx config + the API systemd unit
 ```
+
+The frontend builds to static files. In production Nginx serves them directly, so
+there is no Node process on the server — one service to run, not two.
 
 Full developer reference: **[`DOCUMENTATION.md`](DOCUMENTATION.md)** · Claude Code
 guidance: **[`CLAUDE.md`](CLAUDE.md)** · deployment runbook: **[`DEPLOY.md`](DEPLOY.md)**.
@@ -26,9 +29,9 @@ python -m uvicorn api.main:app --port 8001          # http://127.0.0.1:8001
 ```
 
 ```bash
-# Terminal 2 — frontend
+# Terminal 2 — frontend. No env file needed: the Vite dev server proxies /api
+# to the backend, so development is same-origin exactly like production.
 cd frontend
-cp .env.local.example .env.local                    # NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001
 npm install
 npm run dev                                          # http://localhost:3000
 ```
@@ -47,10 +50,16 @@ There is **no `admin`/`admin` default.** On a genuinely empty database,
 
 ### Auth in development
 
-The HttpOnly `bcr_session` cookie is the session, in dev and in production. It works
-across `localhost:3000` → `127.0.0.1:8001` because `SameSite=Strict` ignores the port.
-Nothing is written to `localStorage`. The only case that uses an in-memory Bearer token
-is an explicitly *remote* `NEXT_PUBLIC_API_BASE`, where the cookie cannot follow.
+The HttpOnly `bcr_session` cookie is the session, in dev and in production. Because
+the dev server proxies `/api`, the cookie is plain same-origin in both — no CORS and
+no `SameSite` edge cases. Nothing is written to `localStorage`. The only case that
+uses an in-memory Bearer token is an explicitly *remote* `VITE_API_BASE`, where the
+cookie cannot follow.
+
+If you bypass the proxy by pointing `VITE_API_BASE` at a loopback URL, the host must
+match your address bar: a page on `localhost:3000` calling `127.0.0.1:8001` counts as
+cross-site, and `SameSite=Strict` drops the session silently — you log in cleanly and
+then get 401s.
 
 ---
 
@@ -89,12 +98,11 @@ Everything needed is in the repo:
 |---|---|
 | [`DEPLOY.md`](DEPLOY.md) | The step-by-step runbook. Start here. |
 | `.env.production.example` | Backend environment template |
-| `frontend/.env.production.example` | `NEXT_PUBLIC_API_BASE=same-origin` |
-| `nginx/balkan-fleet.conf.example` | TLS, rate limits, the `/api` proxy |
-| `nginx/balkan-fleet-api.service.example` | systemd unit for uvicorn |
-| `nginx/balkan-fleet-web.service.example` | systemd unit for `next start` |
+| `frontend/.env.production.example` | `VITE_API_BASE=same-origin` |
+| `nginx/balkan-fleet.conf.example` | TLS, rate limits, the `/api` proxy, static serving + SPA fallback |
+| `nginx/balkan-fleet-api.service.example` | systemd unit for uvicorn (the only service) |
 
-Two settings are easy to get wrong, and both are covered in `DEPLOY.md`:
+Three things are easy to get wrong, and all are covered in `DEPLOY.md`:
 
 - **`TRUST_PROXY` and the Nginx `X-Forwarded-For` header ship together.** Behind Nginx
   the API otherwise sees only `127.0.0.1`, which collapses every visitor into one
@@ -102,6 +110,9 @@ Two settings are easy to get wrong, and both are covered in `DEPLOY.md`:
   spoof their own IP and skip rate limiting entirely.
 - **Keep uvicorn at one worker.** The rate limiter counts in process memory, so two
   workers silently double every limit.
+- **Keep the SPA fallback.** Routing happens in the browser, so `/customers` and
+  `/invoices/<id>` are not files on disk. Without
+  `try_files $uri $uri/ /index.html;` they work when clicked and 404 when reloaded.
 
 ---
 
@@ -109,6 +120,5 @@ Two settings are easy to get wrong, and both are covered in `DEPLOY.md`:
 
 - The bundled `backend/assets/fonts/DejaVu*.ttf` **must stay committed** — invoice PDFs
   need them for Turkish and Albanian glyphs.
-- `frontend/package.json` pins a security-patched `next@14.2.x`.
 - `/internal/stats` exposes per-route timings and must stay blocked at the edge. The
   shipped Nginx config already returns 404 for `/internal/`.

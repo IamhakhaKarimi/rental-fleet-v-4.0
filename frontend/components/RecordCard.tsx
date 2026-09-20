@@ -1,5 +1,3 @@
-"use client";
-
 export interface RecordField {
   label: string;
   value: React.ReactNode;

@@ -1,6 +1,5 @@
-"use client";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
@@ -96,7 +95,7 @@ export default function LoginPage() {
   const { login, user, loading } = useAuth();
   const t = useT();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
-  const router = useRouter();
+  const navigate = useNavigate();
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -111,8 +110,8 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
-    if (!loading && user) router.replace("/");
-  }, [user, loading, router]);
+    if (!loading && user) navigate("/", { replace: true });
+  }, [user, loading, navigate]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -120,7 +119,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(username.trim(), password, remember);
-      router.replace("/");
+      navigate("/", { replace: true });
     } catch (ex: any) {
       setErr(t(ex?.key || "login_failed"));
     } finally {

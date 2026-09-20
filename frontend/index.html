@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Balkan Car Rentals — Fleet Console</title>
+    <meta name="description" content="Fleet Console v4.0" />
+    <!--
+      Apply the saved night-mode preference before paint, so a dark-mode user
+      never sees a white flash. This runs earlier here than it could under Next
+      (where it was injected by the root layout): the browser executes it while
+      parsing <head>, before any module bundle is even fetched.
+    -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("bcr_dark") === "1")
+            document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

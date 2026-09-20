@@ -1,4 +1,3 @@
-"use client";
 import {
   BarChart,
   Bar,
@@ -17,11 +16,13 @@ import { useMoney } from "@/lib/currency";
 /**
  * recharts charts for the Finance page, isolated into a client-only module.
  *
- * recharts 3.x evaluates DOM-dependent code at import time; the Finance page is
- * server-rendered for its initial HTML, so importing recharts there crashed SSR
- * (surfacing as Next's "missing required error components" loop). This module is
- * loaded exclusively via `next/dynamic(..., { ssr: false })`, so recharts is
- * never evaluated on the server.
+ * Kept as its own module so it lands in its own chunk: recharts is ~400kB raw
+ * and only the Finance page uses it, so it is loaded through React.lazy at the
+ * two chart call sites rather than entering the main bundle.
+ *
+ * (Historically this split also existed because recharts 3.x evaluates
+ * DOM-dependent code at import time and crashed Next's server render. There is
+ * no server render any more, so only the bundle-size reason remains.)
  */
 
 // Hardcoded hex (the SVG canvas can't read CSS vars).

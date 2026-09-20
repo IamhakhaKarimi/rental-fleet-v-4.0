@@ -76,7 +76,7 @@ Additions made in the most recent working session, on top of the baseline descri
 | Dimension | Value |
 |---|---|
 | API version | 3.2 |
-| Frontend framework | Next.js 14 (App Router) |
+| Frontend framework | React 18 SPA, built with Vite 5, routed by React Router 6 |
 | Backend framework | FastAPI (Python 3.9+) |
 | Primary database | SQLite (dev) / Turso libSQL or Neon Postgres (prod) |
 | Languages | Turkish, English, Albanian |
@@ -167,17 +167,21 @@ Rental-Fleet-V.4.0/
 │       ├── theme.py                # resolve_theme(), CSS var tokens, night mode
 │       └── nav.py                  # Navigation items, permission-gated
 │
-└── frontend/                       # Next.js 14 application
+└── frontend/                       # Vite + React 18 SPA
     ├── package.json
     ├── tsconfig.json
-    ├── next.config.mjs
+    ├── vite.config.ts              # React plugin, @/ alias, /api dev proxy
     ├── tailwind.config.ts
-    ├── .env.local.example
+    ├── index.html                  # Entry document + pre-paint theme-boot script
+    ├── main.tsx                    # BrowserRouter -> Providers -> App
+    ├── App.tsx                     # THE ROUTE TABLE — every path lives here
+    ├── providers.tsx               # Theme + Auth + i18n + Toast context wrappers
+    ├── ErrorBoundary.tsx           # Per-route error boundary (was error.tsx)
+    ├── styles/globals.css
     │
-    ├── app/
-    │   ├── layout.tsx              # Root: ThemeProvider + font + CSS vars
-    │   ├── providers.tsx           # Theme + Auth + i18n + Toast context wrappers
-    │   ├── login/page.tsx          # Public login form
+    ├── pages/
+    │   ├── AppLayout.tsx           # Auth gate + chrome + <Outlet/>
+    │   ├── Login.tsx               # Public login form
     │   └── (app)/                  # Auth-required route group
     │       ├── layout.tsx          # Sidebar + account popover + auth guard
     │       ├── page.tsx            # Dashboard (staff) | VisitorHome (visitor); date-range carousel
@@ -225,8 +229,9 @@ Rental-Fleet-V.4.0/
 
 | Package | Version | Purpose |
 |---|---|---|
-| Next.js | 14.2 | App Router, SSR + SSG, image optimisation |
+| Vite | 5.4 | Dev server (with the `/api` proxy) + production bundler |
 | React | 18.3 | UI rendering |
+| React Router | 6.30 | Client-side routing |
 | TypeScript | 5.6 | Static typing |
 | Tailwind CSS | 3.4 | Utility-first styling |
 | Recharts | 3.9 | Finance charts (bar, pie, area) |
@@ -303,7 +308,7 @@ Contexts are composed in `app/providers.tsx`:
 - Callers pass already-translated strings — the toast layer is presentation-only.
 
 **API client** (`lib/api.ts`)
-- Thin fetch wrapper: prepends `NEXT_PUBLIC_API_BASE`, attaches `Authorization: Bearer <token>` header.
+- Thin fetch wrapper: prepends `apiBase()` (empty for same-origin, which is the default), and sends the HttpOnly session cookie via `credentials: "include"`. A Bearer header is attached only for an explicitly remote `VITE_API_BASE`.
 - Normalises HTTP errors into typed `ApiError` objects.
 - Handles 401 → auto-logout.
 
@@ -330,7 +335,7 @@ Contexts are composed in `app/providers.tsx`:
 
 | Variable | Example | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_BASE` | `http://127.0.0.1:8001` | Backend base URL. Must NOT have a trailing slash. |
+| `VITE_API_BASE` | *(unset)* | Backend base URL. Unset (or `same-origin`) means relative `/api/...` requests, which is what both the Vite dev proxy and Nginx serve. Set it only for a genuinely remote API; no trailing slash. Inlined at BUILD time. |
 
 ---
 
@@ -924,7 +929,7 @@ Single VPS, same origin. See `DEPLOY.md` for the runbook and `nginx/` for the co
 |---|---|
 | Database | SQLite on local VPS disk (Postgres via `DATABASE_URL` — see §8.8) |
 | Backend | uvicorn, **single process**, proxied at `/api` |
-| Frontend | `next start`, proxied at `/` by Nginx |
+| Frontend | static Vite build, served from disk at `/` by Nginx (no Node process) |
 | Edge | Nginx — TLS, `limit_req`/`limit_conn`, `client_max_body_size` |
 
 Same origin is a security requirement, not a convenience: it removes CORS entirely and
@@ -955,10 +960,10 @@ COOKIE_DOMAIN=.yourdomain.com
 CORS_ORIGINS=https://your-frontend.vercel.app
 ```
 
-**Frontend (Vercel → Environment variables):**
+**Frontend (build-time):**
 
 ```
-NEXT_PUBLIC_API_BASE=https://your-backend.onrender.com
+VITE_API_BASE=same-origin
 ```
 
 ### Health Checks
@@ -999,9 +1004,12 @@ CORS_ORIGINS=http://localhost:3000
 
 ### Frontend `.env.local` (full)
 
+Not required. The Vite dev server proxies `/api` to `127.0.0.1:8001`, so an unset
+`VITE_API_BASE` behaves exactly like production:
+
 ```env
-# Backend API base URL — NO trailing slash
-NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001
+# Only for a genuinely remote API on another origin:
+# VITE_API_BASE=https://api.example.com
 ```
 
 ---
@@ -1028,7 +1036,7 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001
 ### 8.1 Threat Model & Deployment Shape
 
 **Target:** a single VPS running Nginx as a reverse proxy in front of one uvicorn
-process, serving the Next.js frontend and the FastAPI backend **from the same
+process, serving the static frontend build and the FastAPI backend **from the same
 origin** (frontend at `/`, backend proxied at `/api`). SQLite on local disk.
 
 Same-origin deployment is a deliberate security choice, not just convenience — it
@@ -1092,7 +1100,7 @@ Ranked by severity. File references are to the state of the code at the time of 
 | M6 | `[x]` | ~~N+1 thumbnails~~ — new `GET /api/vehicles/thumbs/batch?ids=...` (`vehicle_photos.py#primary_photos_for`, one windowed query for N vehicles) + frontend `lib/useVehicleThumbs.ts` hook, wired into Fleet and Dashboard so a full card list issues ONE batched request instead of one per card. `VehicleThumb` keeps its old per-vehicle lazy fetch as a fallback for standalone use (`src` prop omitted). Verified: SQL tie-break matches the old single-vehicle query, and a full login→cookie-session→batch-endpoint round trip over real HTTP against an isolated DB copy. | `routers/vehicles.py`, `data/repositories/vehicle_photos.py`, `frontend/lib/useVehicleThumbs.ts` |
 | M7 | `[ ]` | `busy_timeout = 5000` lets a request pin a thread for a full 5 seconds under write contention, doing nothing. | `core/db.py:126` |
 | M8 | `[x]` | ~~`CORS_ALLOW_LAN=1` admits **any** RFC-1918 origin with `allow_credentials=True`~~ — **resolved by deletion.** The flag and `settings.cors_origin_regex` were removed with the desktop launcher; CORS and the CSRF Origin check are now exact-match only, with no regex form to enable. See §6 "Removed: the desktop launcher and LAN hosting". | `api/settings.py`, `api/main.py`, `api/middleware.py` |
-| M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote `NEXT_PUBLIC_API_BASE`. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. Split-port dev verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
+| M9 | `[x]` | ~~No CSRF defence on the cookie path~~ — shipped together as required. `cookie_samesite` now defaults to `strict`; new `CSRFOriginMiddleware` (`api/middleware.py`) rejects any state-changing request that carries the auth cookie unless its Origin (falling back to Referer) is on the CORS allow-list — fails closed if both are absent. Frontend `lib/api.ts` no longer persists the token to `localStorage`/`sessionStorage`; the cookie is now the durable session, Bearer is kept in-memory-only and solely for an explicit remote API base. `lib/auth.tsx#refresh` now always calls `/api/me` (cookie-driven) instead of gating on a stored token. Split-port dev verified unaffected — `SameSite` ignores port. | `api/middleware.py`, `frontend/lib/api.ts`, `frontend/lib/auth.tsx` |
 
 #### Verified sound — do not "fix" these
 
@@ -1203,7 +1211,7 @@ from one origin, the token becomes an `HttpOnly`, `Secure`, `SameSite=Strict` co
 unreadable by any script. `SameSite=Strict` plus an `Origin` header check covers CSRF
 (M9) without a token-exchange dance.
 
-The Bearer path is **retained for an explicitly remote `NEXT_PUBLIC_API_BASE` only** —
+The Bearer path is **retained for an explicitly remote `VITE_API_BASE` only** —
 a genuinely cross-site deployment where the cookie cannot follow at all. This is why
 M9 and Part 2 must ship together: enabling cookie auth without the Origin check trades
 an XSS hole for a CSRF hole.
@@ -1359,14 +1367,19 @@ client spoof its own IP and bypass L1 entirely.
 `/api` proxy, `client_max_body_size`, `limit_req`/`limit_conn` (L0), and the
 `X-Forwarded-For`/`X-Real-IP` headers `TRUST_PROXY=true` depends on. Paired
 with `.env.production.example` (every backend knob, REQUIRED ones called out)
-and `nginx/balkan-fleet-{api,web}.service.example` (systemd units — see
+and `nginx/balkan-fleet-api.service.example` (the one systemd unit — see
 `DEPLOY.md`). Also closed in the same pass: `frontend/lib/api.ts#apiBase()`
-had no way to express "same origin, no port" — with `NEXT_PUBLIC_API_BASE`
-unset it fell back to `https://domain:8001`, bypassing Nginx and hitting a
-port that isn't publicly exposed. A new `NEXT_PUBLIC_API_BASE=same-origin`
-literal makes every API call a plain relative fetch instead (verified against
-all three remaining modes: same-origin, remote split-host, local dev — see
-`frontend/.env.production.example`).
+had no way to express "same origin, no port" — with the API base unset it fell
+back to `https://domain:8001`, bypassing Nginx and hitting a port that isn't
+publicly exposed. Same-origin is now the DEFAULT: an unset `VITE_API_BASE`
+makes every API call a plain relative fetch, in dev (Vite proxies `/api`) and
+in production (Nginx proxies it) alike.
+
+**Updated after the Vite migration:** the frontend is no longer a Node service.
+Nginx serves `frontend/dist` from disk, `balkan-fleet-web.service` is gone, and
+the config gained two things it did not need before — `try_files $uri $uri/
+/index.html;` so client-side routes survive a reload, and long-lived caching on
+the content-hashed `/assets/` with `no-cache` on `index.html`.
 
 ### 8.10 Phased Rollout & Verification
 

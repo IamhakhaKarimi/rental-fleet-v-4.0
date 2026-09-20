@@ -1,4 +1,3 @@
-"use client";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDeleteModal } from "@/components/ConfirmDeleteModal";

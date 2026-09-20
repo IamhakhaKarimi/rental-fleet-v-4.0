@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { api, apiPost } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";

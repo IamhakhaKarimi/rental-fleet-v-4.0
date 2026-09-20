@@ -1,4 +1,3 @@
-"use client";
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { useMoney } from "@/lib/currency";

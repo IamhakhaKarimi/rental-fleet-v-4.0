@@ -31,7 +31,7 @@ uvicorn api.main:app --reload --port 8001
 - First run creates `fleet.db` (SQLite) and seeds it from `fleet_master.csv`.
 - Health check: `GET /api/health`
 
-### Frontend (Next.js)
+### Frontend (Vite + React)
 
 ```bash
 cd frontend
@@ -40,7 +40,9 @@ npm run dev
 ```
 
 - UI: `http://localhost:3000`
-- Requires `.env.local` with `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001`
+- **No `.env.local` needed.** The Vite dev server proxies `/api` to
+  `127.0.0.1:8001` (`vite.config.ts`), so dev is same-origin exactly like
+  production. Set `VITE_API_BASE` only for a genuinely remote API.
 
 ### Default admin credentials (first run)
 
@@ -55,7 +57,7 @@ otherwise a random password is generated and logged once. There is no more
 ## Architecture at a Glance
 
 ```
-frontend/          Next.js 14 App Router (TypeScript, Tailwind 3.4)
+frontend/          Vite 5 + React 18 SPA (TypeScript, Tailwind 3.4, React Router 6)
 backend/
   api/             FastAPI app layer (routers, settings, deps, security)
   config/          Shared config: roles, i18n (3 langs), rental terms
@@ -86,6 +88,11 @@ backend/
 | `backend/services/auth_service.py` | Password hashing, login, temp password |
 | `backend/services/scheduling_service.py` | Availability check, return window |
 | `backend/ui/invoice_links.py` | QR payloads + per-QR guided action buttons |
+| `frontend/App.tsx` | The route table — every path in one file |
+| `frontend/main.tsx` | Entry: BrowserRouter → Providers → App |
+| `frontend/index.html` | Vite entry document; carries the pre-paint theme-boot script |
+| `frontend/pages/` | One file per route + `AppLayout` (the auth gate, `<Outlet/>`) |
+| `frontend/ErrorBoundary.tsx` | Replaces Next's `error.tsx`; wraps each route element |
 | `frontend/lib/api.ts` | Fetch wrapper; `apiBase()` (same-origin / remote / loopback) + HttpOnly-cookie auth |
 | `frontend/lib/auth.tsx` | `useAuth()` context |
 | `frontend/lib/i18n.tsx` | `useT()` i18n context |
@@ -269,8 +276,15 @@ breaks it again.
 - `audit_service` should be called in routers after a successful mutation, not inside services.
 - Use `deps.require("perm")` — never hardcode role strings in router bodies.
 
-### Frontend (TypeScript / Next.js)
+### Frontend (TypeScript / React)
 
+- **Routing:** add a route to `App.tsx` and a component under `pages/`. There is no
+  file-system routing any more — a file in `pages/` that nothing references in
+  `App.tsx` is simply dead code. Navigate with `useNavigate()` / `<Link to>` from
+  `react-router-dom`; never `next/*`, and never `location.assign` for an in-app move
+  (it throws away the SPA and reloads everything).
+- **Route paths are the public contract.** `lib/nav.ts#routeFor` and every saved
+  invoice link depend on them. Changing one is a breaking change, not a rename.
 - All API calls go through `lib/api.ts` — never use `fetch()` directly in components.
 - Money display: always use `formatEur(cents)` from `lib/money.ts`.
 - Permission checks in UI: use `can(user, "perm")` from `lib/perms.ts`.
@@ -385,6 +399,35 @@ Two specificity gotchas that layer already solves:
 ---
 
 ## Recent Updates (this session)
+
+- **Frontend migrated off Next.js to Vite + React Router.** The app was already a
+  client-side SPA wearing a Next shell — 50 of 61 files were `"use client"`, there
+  were no API routes, no server actions, no ISR, and exactly one real server
+  component (`app/layout.tsx`, which rendered `<html>` and a theme script). The
+  payoff is in production: Nginx serves `frontend/dist` directly, so
+  `balkan-fleet-web.service` and the Node runtime are both gone — **one systemd
+  unit instead of two.**
+  - **Structure.** `app/` became `pages/` (one file per route) plus `App.tsx` (the
+    route table), `main.tsx`, `index.html` and `ErrorBoundary.tsx` at the frontend
+    root; `app/globals.css` → `styles/globals.css`. `components/` and `lib/` did not
+    move, so the `@/*` alias and ~47 files of imports are untouched. **URL paths are
+    unchanged**, including `/invoices/:dealId` — every saved invoice link still works.
+  - **`(app)` became a pathless layout route.** Same nesting, same auth gate, no URL
+    segment — exactly what the parentheses meant. `error.tsx`/`global-error.tsx`
+    became one `ErrorBoundary` class component wrapped around each route element.
+  - **Dev is now same-origin too.** `vite.config.ts` proxies `/api` to
+    `127.0.0.1:8001`, and `apiBase()` treats *unset* as same-origin rather than
+    guessing `127.0.0.1:8001`. That removes a real trap: a page on `localhost:3000`
+    calling `127.0.0.1:8001` is cross-site for cookie purposes, so `SameSite=Strict`
+    dropped the session and you got a clean login followed by 401s. No `.env.local`
+    is needed at all now.
+  - **The theme-boot script moved into `index.html`**, where it runs while the head
+    is parsed — earlier than Next could inject it, so the dark-mode flash is gone.
+  - **Nginx now needs `try_files $uri $uri/ /index.html;`.** Verified the hard way:
+    a plain static server returns **404** for `/finance` and `/invoices/<id>` while
+    returning 200 for `/`. Clicking through to a page hides this; reloading exposes it.
+    `/assets/` is marked `immutable` (filenames are content-hashed) and `index.html`
+    `no-cache`, so a deploy needs no cache purge.
 
 
 - **Display currency (EUR / Albanian Lek) now works app-wide.** The setting was
@@ -572,20 +615,21 @@ Two specificity gotchas that layer already solves:
 |---|---|
 | Database | **SQLite on local VPS disk** (Postgres later via `DATABASE_URL` — see §8.8) |
 | Backend | **uvicorn, single process**, proxied at `/api` |
-| Frontend | **Next.js served by Nginx at `/`** — same origin as the API |
+| Frontend | **Static Vite build served by Nginx at `/`** — same origin as the API, no Node process |
 | Edge | **Nginx** — TLS, `limit_req`/`limit_conn`, `client_max_body_size` (L0) |
 
 Same-origin is a security requirement, not a convenience: it removes CORS entirely and
 is what makes the `HttpOnly` cookie migration possible (DOCUMENTATION.md → §8.5).
 
-**`DEPLOY.md` was rewritten in Phase 6** for this single-VPS same-origin target — no
-more Vercel/Render/Turso, no more `admin`/`admin`. Config templates live at
-`.env.production.example` (backend), `frontend/.env.production.example` (frontend —
-`NEXT_PUBLIC_API_BASE=same-origin`), and `nginx/` (the Nginx config + two systemd
-units). Fixed in the same pass: `frontend/lib/api.ts#apiBase()` had no way to express
-"same origin, no port" — with the env var unset it fell back to guessing a port that
-isn't publicly exposed behind Nginx. The new `same-origin` literal makes every API call
-a plain relative fetch instead.
+**`DEPLOY.md` targets this single-VPS same-origin setup** — no Vercel/Render/Turso, no
+`admin`/`admin`. Config templates live at `.env.production.example` (backend),
+`frontend/.env.production.example` (frontend — `VITE_API_BASE=same-origin`), and
+`nginx/` (the Nginx config + the one systemd unit, for the API).
+
+`apiBase()` treats an unset base as same-origin, so every API call is a plain relative
+fetch that the proxy in front resolves — Vite's in dev, Nginx's in production. Nginx
+serves `frontend/dist` from disk, which is why **`try_files $uri $uri/ /index.html;`
+is load-bearing**: client-side routes are not files, so without it they 404 on reload.
 
 ## graphify
 

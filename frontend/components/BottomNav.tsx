@@ -1,7 +1,5 @@
-"use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link, useLocation } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { isNavActive, routeFor, splitNav } from "@/lib/nav";
@@ -20,7 +18,7 @@ import type { BusinessInfo, NavItem } from "@/lib/types";
 export function BottomNav() {
   const t = useT();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
-  const pathname = usePathname();
+  const pathname = useLocation().pathname;
   const [nav, setNav] = useState<NavItem[]>([]);
   const [biz, setBiz] = useState<BusinessInfo | null>(null);
   const [drawer, setDrawer] = useState(false);
@@ -49,7 +47,7 @@ export function BottomNav() {
           return (
             <Link
               key={item.key}
-              href={routeFor(item.key)}
+              to={routeFor(item.key)}
               className={`${slot} ${active ? "text-ink" : "text-muted"}`}
               aria-current={active ? "page" : undefined}
             >

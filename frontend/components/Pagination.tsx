@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * Prev/next + page indicator for a server-paginated table (M5). Purely
  * presentational, mirrors the icon-button style of ViewToggle/RefreshIcon.

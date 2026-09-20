@@ -1,4 +1,3 @@
-"use client";
 import { createContext, useCallback, useContext, useEffect } from "react";
 import { apiGet } from "./api";
 import { useAuth } from "./auth";

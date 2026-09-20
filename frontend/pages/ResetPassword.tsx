@@ -1,6 +1,5 @@
-"use client";
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, apiGet, apiPost } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { BusinessInfo } from "@/lib/types";
@@ -28,8 +27,8 @@ function checkStrength(pw: string, policy: PasswordPolicy | null) {
 function ResetPasswordInner() {
   const t = useT();
   const tf = (k: string, f: string) => (t(k) === k ? f : t(k));
-  const router = useRouter();
-  const params = useSearchParams();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const token = params.get("token") || "";
 
   const [biz, setBiz] = useState<BusinessInfo | null>(null);
@@ -123,7 +122,7 @@ function ResetPasswordInner() {
                 <span className="msr text-[18px] text-ok">check_circle</span>
                 {tf("password_reset_done", "Your password has been updated. You can sign in now.")}
               </div>
-              <button className="btn btn-primary w-full" onClick={() => router.replace("/login")}>
+              <button className="btn btn-primary w-full" onClick={() => navigate("/login", { replace: true })}>
                 {tf("back_to_login", "Back to sign in")}
               </button>
             </div>
@@ -139,7 +138,7 @@ function ResetPasswordInner() {
                 <span className="msr text-[18px]">error</span>
                 {tf("reset_token_expired", "This reset link has expired. Please request a new one.")}
               </div>
-              <button className="btn w-full" onClick={() => router.replace("/login")}>
+              <button className="btn w-full" onClick={() => navigate("/login", { replace: true })}>
                 {tf("back_to_login", "Back to sign in")}
               </button>
             </div>
@@ -220,11 +219,9 @@ function ResetPasswordInner() {
   );
 }
 
+// The Suspense boundary this used to need is gone: it existed only because the
+// App Router suspends on useSearchParams during prerender. React Router's
+// useSearchParams reads location synchronously and never suspends.
 export default function ResetPasswordPage() {
-  // useSearchParams needs a Suspense boundary under the App Router.
-  return (
-    <Suspense fallback={null}>
-      <ResetPasswordInner />
-    </Suspense>
-  );
+  return <ResetPasswordInner />;
 }

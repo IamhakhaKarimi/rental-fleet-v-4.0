@@ -32,15 +32,12 @@ env/
 
 # ───────────── Node / Next.js (frontend) ─────────────
 node_modules/
-.next/
-.next-dev/
 out/
 build/
 dist/
 .turbo/
 graphify-out/
 *.tsbuildinfo
-next-env.d.ts
 .vercel/
 
 # ───────────── OS / editor ─────────────

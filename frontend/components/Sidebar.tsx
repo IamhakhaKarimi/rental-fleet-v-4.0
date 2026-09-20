@@ -1,7 +1,5 @@
-"use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
@@ -34,8 +32,8 @@ const rowClass = (active: boolean, expanded: boolean) =>
 export function Sidebar() {
   const t = useT();
   const { user, logout } = useAuth();
-  const router = useRouter();
-  const pathname = usePathname();
+  const navigate = useNavigate();
+  const pathname = useLocation().pathname;
 
   const [expanded, setExpanded] = useState(true);
   const [nav, setNav] = useState<NavItem[]>([]);
@@ -59,7 +57,7 @@ export function Sidebar() {
 
   async function doLogout() {
     await logout();
-    router.replace("/login");
+    navigate("/login", { replace: true });
   }
 
   const roleLabel = user ? t(user.role_label_key) : "";
@@ -98,7 +96,7 @@ export function Sidebar() {
         {nav.map((item) => (
           <Link
             key={item.key}
-            href={routeFor(item.key)}
+            to={routeFor(item.key)}
             className={rowClass(isActive(item.key), expanded)}
             title={t(item.label_key)}
             aria-current={isActive(item.key) ? "page" : undefined}
@@ -114,7 +112,7 @@ export function Sidebar() {
         {can(user, "create_reservation") && <Bell expanded={expanded} />}
 
         <Link
-          href="/settings"
+          to="/settings"
           className={rowClass(isActive("settings"), expanded)}
           title={t("nav_settings")}
           aria-current={isActive("settings") ? "page" : undefined}

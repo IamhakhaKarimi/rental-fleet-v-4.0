@@ -1,4 +1,3 @@
-"use client";
 /**
  * The annual license cap, as the UI needs it.
  *

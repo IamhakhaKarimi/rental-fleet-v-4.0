@@ -99,6 +99,12 @@ app = FastAPI(
     title="Balkan Car Rentals — Fleet Console API",
     version="3.2",
     lifespan=lifespan,
+    # Swagger/ReDoc/OpenAPI JSON leak route+schema detail and should not be
+    # reachable in production. `cookie_secure` is already the app's one
+    # production flag (settings.py), so reuse it instead of adding a new knob.
+    docs_url=None if settings.cookie_secure else "/docs",
+    redoc_url=None if settings.cookie_secure else "/redoc",
+    openapi_url=None if settings.cookie_secure else "/openapi.json",
 )
 
 # ── Middleware ────────────────────────────────────────────────────────────────

@@ -5,6 +5,9 @@
 *.db-wal
 *.db-journal
 *.bak
+*.bak-shm
+*.bak-wal
+*.bak-journal
 # Env files with real values (the *.example templates ARE committed).
 .env
 .env.*
